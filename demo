@@ -33,3 +33,4 @@
   howpublished = {\url{https://github.com/kyamagu/mexopencv/wiki/Camera-Calibration}},
   note = {Accessed: 2025-05-21}
 }
+Calibration must be performed on the specific camera-lens setup, as both the projection matrix and distortion coefficients depend on the entire imaging system.
