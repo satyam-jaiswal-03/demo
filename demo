@@ -320,3 +320,24 @@ def draw_measurements(image, measurements):
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
     
     return output
+
+
+
+
+
+
+
+
+# Perform dimensional analysis (requires a known reference measurement)
+reference_length_pixels = 100  # Measure a known object in the image (in pixels)
+reference_length_units = 10.0  # The actual length of that object (in cm, inches, etc.)
+
+measurements = dimensional_analysis(undistorted, reference_length_pixels, reference_length_units)
+
+# Draw measurements on the image
+measured_image = draw_measurements(undistorted, measurements)
+
+# Display or save the result
+cv2.imshow("Measurements", measured_image)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
