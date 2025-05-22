@@ -1,52 +1,73 @@
 import cv2
 import numpy as np
 
-def undistort_fisheye(image, strength=0.5, zoom=1.0):
+def undistort_fisheye(image, strength=0.5, zoom=1.0, balance=0.0):
     """
-    Approximate fisheye undistortion without calibration.
+    Improved fisheye undistortion without calibration.
     
     Args:
-        image: Input fisheye image.
-        strength: Distortion correction strength (0.0 to 1.0).
-        zoom: Zoom factor to crop (1.0 = no zoom).
+        image: Input fisheye image (BGR format)
+        strength: Distortion correction strength (0.0 to 1.0)
+        zoom: Zoom factor (0.8 to 1.5) to adjust output crop
+        balance: Balance between linear and nonlinear correction (0.0 to 1.0)
     Returns:
-        Undistorted image.
+        Undistorted image
     """
+    if image is None:
+        raise ValueError("Input image is None")
+        
     h, w = image.shape[:2]
-    map_x = np.zeros((h, w), dtype=np.float32)
-    map_y = np.zeros((h, w), dtype=np.float32)
-
-    # Normalize coordinates to [-1, 1]
-    x = (np.arange(w) - w / 2) / (w / 2)
-    y = (np.arange(h) - h / 2) / (h / 2)
+    
+    # Create normalized pixel coordinates
+    x = (np.arange(w, dtype=np.float32) - w * 0.5) / (w * 0.5)
+    y = (np.arange(h, dtype=np.float32) - h * 0.5) / (h * 0.5)
     xx, yy = np.meshgrid(x, y)
-
-    # Compute radial distance from center
+    
+    # Calculate radial distance
     r = np.sqrt(xx**2 + yy**2)
-    theta = r * strength  # Empirical correction factor
-
-    # Avoid division by zero
-    mask = r != 0
-    new_x = np.where(mask, (np.sin(theta) / r) * xx, xx)
-    new_y = np.where(mask, (np.sin(theta) / r) * yy, yy)
-
-    # Apply zoom
-    new_x *= zoom
-    new_y *= zoom
-
-    # Convert back to pixel coordinates
-    map_x = (new_x * (w / 2) + (w / 2)
-    map_y = (new_y * (h / 2) + (h / 2)
-
+    theta = np.arctan(r)  # More accurate than simple multiplication
+    
+    # Avoid division by zero at center
+    mask = r > 1e-8
+    inv_r = np.zeros_like(r)
+    inv_r[mask] = 1.0 / r[mask]
+    
+    # Blend between linear and nonlinear correction
+    correction = (1.0 - balance) * np.sin(theta * strength) + balance * (theta * strength)
+    
+    # Apply correction
+    new_x = xx * inv_r * correction
+    new_y = yy * inv_r * correction
+    
+    # Apply zoom and center
+    new_x = new_x * zoom * (w * 0.5) + (w * 0.5)
+    new_y = new_y * zoom * (h * 0.5) + (h * 0.5)
+    
     # Remap the image
     undistorted = cv2.remap(
-        image, map_x, map_y, 
-        interpolation=cv2.INTER_LINEAR, 
-        borderMode=cv2.BORDER_CONSTANT
+        image, 
+        new_x.astype(np.float32), 
+        new_y.astype(np.float32), 
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0)  # Black borders
     )
+    
     return undistorted
 
-# Example usage
-image = cv2.imread("fisheye_input.jpg")
-undistorted = undistort_fisheye(image, strength=0.6, zoom=1.1)
-cv2.imwrite("undistorted_output.jpg", undistorted)
+# Example usage with error handling
+try:
+    image = cv2.imread("fisheye_input.jpg")
+    if image is None:
+        raise FileNotFoundError("Could not load image")
+        
+    # Recommended starting parameters:
+    # - strength: 0.5-0.7 for moderate correction
+    # - zoom: 1.0-1.2 to compensate for edge stretching
+    # - balance: 0.3 for natural-looking results
+    undistorted = undistort_fisheye(image, strength=0.6, zoom=1.1, balance=0.3)
+    
+    cv2.imwrite("undistorted_output.jpg", undistorted)
+    print("Undistortion completed successfully")
+except Exception as e:
+    print(f"Error: {str(e)}")
