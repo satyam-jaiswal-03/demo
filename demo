@@ -1,84 +1,207 @@
 import cv2
 import numpy as np
+from scipy.spatial import distance
+from skimage.measure import label, regionprops
 
-def undistort_phone_fisheye(image, f_phone_mm, f_lens_mm, sensor_size_mm, fov_degrees=180, output_resolution=None):
+def undistort_fisheye(image, strength=0.5, zoom=1.0, balance=0.0):
     """
-    Undistort fisheye images from phone + external lens combo.
+    Improved fisheye undistortion with area preservation and quality maintenance.
     
     Args:
-        image: Input image (BGR)
-        f_phone_mm: Phone camera focal length (mm)
-        f_lens_mm: Fisheye lens focal length (mm)
-        sensor_size_mm: (width, height) of phone sensor (mm)
-        fov_degrees: Fisheye FOV (typically 180°)
-        output_resolution: Output size (width, height)
+        image: Input fisheye image (BGR format)
+        strength: Distortion correction strength (0.0 to 1.0)
+        zoom: Zoom factor (0.8 to 1.5) to adjust output crop
+        balance: Balance between linear and nonlinear correction (0.0 to 1.0)
     Returns:
-        Undistorted image, calibration info
+        Undistorted image with preserved area and quality
     """
+    if image is None:
+        raise ValueError("Input image is None")
+        
     h, w = image.shape[:2]
-    output_resolution = output_resolution or (w, h)
-    out_w, out_h = output_resolution
-    sensor_w_mm, sensor_h_mm = sensor_size_mm
     
-    # 1. Calculate effective focal length
-    d = 0  # Lens-to-phone distance (approx 0 for clip-on lenses)
-    f_effective = 1 / (1/f_phone_mm + 1/f_lens_mm - d/(f_phone_mm*f_lens_mm))
-    
-    # 2. Calculate pixel pitch (mm/px)
-    pixel_size_mm = (sensor_w_mm/w + sensor_h_mm/h)/2
-    
-    # 3. Create output grid (normalized)
-    x = np.linspace(-1, 1, out_w, dtype=np.float32)
-    y = np.linspace(-1, 1, out_h, dtype=np.float32)
+    # Create normalized pixel coordinates
+    x = (np.arange(w, dtype=np.float32) - w * 0.5) / (w * 0.5)
+    y = (np.arange(h, dtype=np.float32) - h * 0.5) / (h * 0.5)
     xx, yy = np.meshgrid(x, y)
-    out_r = np.sqrt(xx**2 + yy**2)
     
-    # 4. Fisheye projection (equidistant model)
-    fov_rad = np.deg2rad(fov_degrees)
-    theta = np.clip(out_r * (fov_rad/2), 0, fov_rad/2)
+    # Calculate radial distance
+    r = np.sqrt(xx**2 + yy**2)
+    theta = np.arctan(r)  # More accurate than simple multiplication
     
-    # 5. Avoid division by zero
-    mask = out_r > 1e-8
-    inv_out_r = np.zeros_like(out_r)
-    inv_out_r[mask] = 1.0 / out_r[mask]
+    # Avoid division by zero at center
+    mask = r > 1e-8
+    inv_r = np.zeros_like(r)
+    inv_r[mask] = 1.0 / r[mask]
     
-    # 6. Convert to input coordinates with physical scaling
-    in_r = np.tan(theta) * (f_effective / pixel_size_mm)
-    in_x = in_r * xx * inv_out_r
-    in_y = in_r * yy * inv_out_r
+    # Enhanced correction formula with area preservation
+    correction = (1.0 - balance) * np.sin(theta * strength) + balance * (theta * strength)
     
-    # 7. Map to original image
-    map_x = (in_x * (w/2) + (w/2)).astype(np.float32)
-    map_y = (in_y * (h/2) + (h/2)).astype(np.float32)
+    # Area preservation adjustment
+    area_factor = 1.0 / (1.0 + 0.2 * strength)  # Compensate for area changes
+    correction *= area_factor
     
-    # 8. Remap with high-quality interpolation
+    # Apply correction
+    new_x = xx * inv_r * correction
+    new_y = yy * inv_r * correction
+    
+    # Apply zoom and center with adjusted scaling for quality preservation
+    zoom_factor = zoom * (1.0 - 0.1 * strength)  # Compensate for edge stretching
+    new_x = new_x * zoom_factor * (w * 0.5) + (w * 0.5)
+    new_y = new_y * zoom_factor * (h * 0.5) + (h * 0.5)
+    
+    # High-quality remapping with Lanczos interpolation
     undistorted = cv2.remap(
-        image, map_x, map_y,
+        image, 
+        new_x.astype(np.float32), 
+        new_y.astype(np.float32), 
         interpolation=cv2.INTER_LANCZOS4,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0, 0, 0)
+        borderMode=cv2.BORDER_REFLECT101  # Better edge handling
     )
     
-    # Calibration info
-    calibration = {
-        'effective_focal_length_mm': f_effective,
-        'pixel_size_mm': pixel_size_mm,
-        'mm_per_px': f_effective * pixel_size_mm / w
-    }
-    
-    return undistorted, calibration
+    return undistorted
 
-# Example: iPhone 12 + 180° fisheye lens
-if __name__ == "__main__":
-    img = cv2.imread("phone_fisheye.jpg")
-    undistorted, calib = undistort_phone_fisheye(
-        image=img,
-        f_phone_mm=4.2,          # iPhone 12 main camera
-        f_lens_mm=1.8,           # Typical fisheye attachment
-        sensor_size_mm=(6.17, 4.55),  # iPhone 12 sensor
-        fov_degrees=180,
-        output_resolution=(1920, 1080)  # Full HD output
-    )
+def dimensional_analysis(image, reference_length_pixels, reference_length_units):
+    """
+    Perform dimensional analysis on objects in the image.
     
-    print(f"Calibration: {calib}")
-    cv2.imwrite("undistorted_phone_output.jpg", undistorted)
+    Args:
+        image: Input image (BGR format)
+        reference_length_pixels: Known length in pixels
+        reference_length_units: Actual length in real-world units
+    Returns:
+        Dictionary containing measurements of detected objects
+    """
+    if image is None:
+        raise ValueError("Input image is None")
+        
+    # Convert to grayscale and enhance contrast
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.equalizeHist(gray)
+    
+    # Apply adaptive thresholding
+    thresh = cv2.adaptiveThreshold(gray, 255, 
+                                  cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                  cv2.THRESH_BINARY_INV, 11, 2)
+    
+    # Remove small noise
+    kernel = np.ones((3,3), np.uint8)
+    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+    
+    # Find contours
+    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Calculate pixel-to-unit conversion factor
+    pixel_to_unit = reference_length_units / reference_length_pixels
+    
+    measurements = []
+    min_contour_area = 100  # Minimum area to consider as valid object
+    
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < min_contour_area:
+            continue
+            
+        # Fit rotated rectangle
+        rect = cv2.minAreaRect(contour)
+        box = cv2.boxPoints(rect)
+        box = np.int0(box)
+        
+        # Calculate dimensions
+        width_px = min(rect[1])
+        height_px = max(rect[1])
+        
+        # Convert to real units
+        width_units = width_px * pixel_to_unit
+        height_units = height_px * pixel_to_unit
+        area_units = area * (pixel_to_unit ** 2)
+        
+        # Calculate perimeter
+        perimeter_px = cv2.arcLength(contour, True)
+        perimeter_units = perimeter_px * pixel_to_unit
+        
+        # Store measurements
+        measurements.append({
+            'width_px': width_px,
+            'height_px': height_px,
+            'width_units': width_units,
+            'height_units': height_units,
+            'area_px': area,
+            'area_units': area_units,
+            'perimeter_px': perimeter_px,
+            'perimeter_units': perimeter_units,
+            'aspect_ratio': width_px / height_px,
+            'centroid': rect[0]
+        })
+    
+    return measurements
+
+def draw_measurements(image, measurements):
+    """
+    Draw measurements on the image.
+    
+    Args:
+        image: Input image
+        measurements: List of measurement dictionaries
+    Returns:
+        Image with measurements drawn
+    """
+    output = image.copy()
+    
+    for meas in measurements:
+        center = tuple(map(int, meas['centroid']))
+        
+        # Draw bounding box
+        cv2.drawContours(output, [meas['bounding_box']], 0, (0, 255, 0), 2)
+        
+        # Draw dimensions
+        cv2.putText(output, f"W: {meas['width_units']:.2f} units", 
+                   (center[0]+20, center[1]-20), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        cv2.putText(output, f"H: {meas['height_units']:.2f} units", 
+                   (center[0]+20, center[1]+0), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        cv2.putText(output, f"A: {meas['area_units']:.2f} sq.units", 
+                   (center[0]+20, center[1]+20), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+    
+    return output
+
+# Example usage with error handling
+try:
+    # Load image
+    image = cv2.imread("fisheye_input.jpg")
+    if image is None:
+        raise FileNotFoundError("Could not load image")
+    
+    # Undistort with optimized parameters for area/quality preservation
+    undistorted = undistort_fisheye(image, strength=0.6, zoom=1.05, balance=0.3)
+    
+    # Perform dimensional analysis (requires a known reference measurement)
+    # For example, if a 100px object in the image is known to be 10cm in real life:
+    reference_length_pixels = 100  # Must be measured from the image
+    reference_length_units = 10.0  # In centimeters (or any unit)
+    
+    measurements = dimensional_analysis(undistorted, reference_length_pixels, reference_length_units)
+    
+    # Draw measurements on the image
+    measured_image = draw_measurements(undistorted, measurements)
+    
+    # Save results
+    cv2.imwrite("undistorted_output.jpg", undistorted)
+    cv2.imwrite("measured_output.jpg", measured_image)
+    
+    # Print measurements
+    print("Measurement results:")
+    for i, meas in enumerate(measurements):
+        print(f"Object {i+1}:")
+        print(f"  Width: {meas['width_units']:.2f} units")
+        print(f"  Height: {meas['height_units']:.2f} units")
+        print(f"  Area: {meas['area_units']:.2f} square units")
+        print(f"  Perimeter: {meas['perimeter_units']:.2f} units")
+        print(f"  Aspect ratio: {meas['aspect_ratio']:.2f}")
+    
+    print("Processing completed successfully")
+    
+except Exception as e:
+    print(f"Error: {str(e)}")
