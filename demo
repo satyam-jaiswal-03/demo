@@ -205,3 +205,118 @@ try:
     
 except Exception as e:
     print(f"Error: {str(e)}")
+
+
+
+
+
+
+
+
+
+def dimensional_analysis(image, reference_length_pixels, reference_length_units):
+    """
+    Perform dimensional analysis on objects in the image.
+    
+    Args:
+        image: Input image (BGR format)
+        reference_length_pixels: Known length in pixels
+        reference_length_units: Actual length in real-world units
+    Returns:
+        Dictionary containing measurements of detected objects
+    """
+    if image is None:
+        raise ValueError("Input image is None")
+        
+    # Convert to grayscale and enhance contrast
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.equalizeHist(gray)
+    
+    # Apply adaptive thresholding
+    thresh = cv2.adaptiveThreshold(gray, 255, 
+                                  cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                  cv2.THRESH_BINARY_INV, 11, 2)
+    
+    # Remove small noise
+    kernel = np.ones((3,3), np.uint8)
+    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+    
+    # Find contours
+    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Calculate pixel-to-unit conversion factor
+    pixel_to_unit = reference_length_units / reference_length_pixels
+    
+    measurements = []
+    min_contour_area = 100  # Minimum area to consider as valid object
+    
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < min_contour_area:
+            continue
+            
+        # Fit rotated rectangle
+        rect = cv2.minAreaRect(contour)
+        box = cv2.boxPoints(rect)
+        box = np.int32(box)  # Convert to integers for drawing
+        
+        # Calculate dimensions
+        width_px = min(rect[1])
+        height_px = max(rect[1])
+        
+        # Convert to real units
+        width_units = width_px * pixel_to_unit
+        height_units = height_px * pixel_to_unit
+        area_units = area * (pixel_to_unit ** 2)
+        
+        # Calculate perimeter
+        perimeter_px = cv2.arcLength(contour, True)
+        perimeter_units = perimeter_px * pixel_to_unit
+        
+        # Store measurements including bounding box
+        measurements.append({
+            'width_px': width_px,
+            'height_px': height_px,
+            'width_units': width_units,
+            'height_units': height_units,
+            'area_px': area,
+            'area_units': area_units,
+            'perimeter_px': perimeter_px,
+            'perimeter_units': perimeter_units,
+            'aspect_ratio': width_px / height_px,
+            'centroid': rect[0],
+            'bounding_box': box  # Add the bounding box points
+        })
+    
+    return measurements
+
+def draw_measurements(image, measurements):
+    """
+    Draw measurements on the image.
+    
+    Args:
+        image: Input image
+        measurements: List of measurement dictionaries
+    Returns:
+        Image with measurements drawn
+    """
+    output = image.copy()
+    
+    for meas in measurements:
+        center = tuple(map(int, meas['centroid']))
+        
+        # Draw bounding box (now properly defined)
+        cv2.drawContours(output, [meas['bounding_box']], 0, (0, 255, 0), 2)
+        
+        # Draw dimensions
+        cv2.putText(output, f"W: {meas['width_units']:.2f} units", 
+                   (center[0]+20, center[1]-20), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        cv2.putText(output, f"H: {meas['height_units']:.2f} units", 
+                   (center[0]+20, center[1]+0), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        cv2.putText(output, f"A: {meas['area_units']:.2f} sq.units", 
+                   (center[0]+20, center[1]+20), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+    
+    return output
