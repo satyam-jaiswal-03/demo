@@ -341,3 +341,70 @@ measured_image = draw_measurements(undistorted, measurements)
 cv2.imshow("Measurements", measured_image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
+
+
+
+
+
+
+def undistort_fisheye_improved(image, strength=0.5, zoom=1.0, balance=0.3, output_shape=None):
+    """
+    Advanced fisheye undistortion with better quality preservation.
+    
+    Args:
+        image: Input fisheye image (BGR format)
+        strength: Distortion correction strength (0.0 to 1.0)
+        zoom: Zoom factor (0.8 to 1.5) to adjust output crop
+        balance: Balance between linear and nonlinear correction (0.0 to 1.0)
+        output_shape: Optional (width, height) tuple for output size
+    Returns:
+        Undistorted image with preserved quality
+    """
+    if image is None:
+        raise ValueError("Input image is None")
+        
+    h, w = image.shape[:2]
+    
+    # Use specified output shape or maintain input dimensions
+    if output_shape:
+        out_h, out_w = output_shape
+    else:
+        out_h, out_w = h, w
+    
+    # Create normalized pixel coordinates in output image space
+    x = (np.arange(out_w, dtype=np.float32) - out_w * 0.5
+    y = (np.arange(out_h, dtype=np.float32) - out_h * 0.5
+    xx, yy = np.meshgrid(x, y)
+    
+    # Normalize coordinates to [-1, 1] range
+    xx_norm = xx / (out_w * 0.5)
+    yy_norm = yy / (out_h * 0.5)
+    
+    # Calculate radial distance with protection against division by zero
+    r = np.sqrt(xx_norm**2 + yy_norm**2)
+    r = np.clip(r, 1e-8, 1.0)  # Avoid division by zero and extreme values
+    
+    # Advanced distortion correction formula
+    theta = r * (1.0 - strength * 0.5)  # Base correction
+    theta = np.where(r > 0.5, 
+                    theta * (1.0 + balance * (r - 0.5) * 2),  # Stronger correction at edges
+                    theta * (1.0 - balance * (0.5 - r) * 2))  # Gentler correction at center
+    
+    # Apply zoom factor with edge protection
+    zoom_factor = zoom * (1.0 + 0.2 * strength)  # Compensate for edge stretching
+    new_x = xx_norm * theta * zoom_factor * (w * 0.5) + (w * 0.5)
+    new_y = yy_norm * theta * zoom_factor * (h * 0.5) + (h * 0.5)
+    
+    # High-quality remapping with multiple interpolation methods
+    undistorted = cv2.remap(
+        image, 
+        new_x.astype(np.float32), 
+        new_y.astype(np.float32), 
+        interpolation=cv2.INTER_LANCZOS4,
+        borderMode=cv2.BORDER_REFLECT101
+    )
+    
+    # Post-processing to enhance quality
+    undistorted = cv2.detailEnhance(undistorted, sigma_s=10, sigma_r=0.15)
+    
+    return undistorted
