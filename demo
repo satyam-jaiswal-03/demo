@@ -408,3 +408,173 @@ def undistort_fisheye_improved(image, strength=0.5, zoom=1.0, balance=0.3, outpu
     undistorted = cv2.detailEnhance(undistorted, sigma_s=10, sigma_r=0.15)
     
     return undistorted
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Key Objectives:
+Undistort using an approximate fisheye model (e.g. stereographic or equisolid).
+
+Preserve resolution and field of view as much as possible.
+
+Enable accurate dimensional analysis later using a known real-world reference object (like a ruler in the image).
+
+🧠 Best Strategy Overview:
+Use stereographic projection for natural undistortion.
+
+Use a manually specified FOV.
+
+Normalize coordinates to apply distortion correction.
+
+Let the user pass a known object length (e.g., a line in pixels and its real-world length in cm) to calculate pixels-per-cm.
+
+🧾 Code: Undistortion with Post-Hoc Scaling
+python
+Copy
+Edit
+import cv2
+import numpy as np
+
+def undistort_fisheye_approx(image, model="stereographic", fov_deg=180, zoom=1.0):
+    """
+    Undistort a fisheye image using an approximate model (stereographic, equisolid, etc.).
+    
+    Args:
+        image (np.ndarray): Input fisheye image (BGR)
+        model (str): One of 'stereographic', 'equisolid', 'equidistant'
+        fov_deg (float): Horizontal field of view in degrees
+        zoom (float): Zoom factor (1.0 = keep original FOV)
+    
+    Returns:
+        Undistorted image (same size), remap_x, remap_y
+    """
+    h, w = image.shape[:2]
+    cx, cy = w / 2, h / 2
+
+    # Normalize coordinates to [-1, 1]
+    x = (np.arange(w, dtype=np.float32) - cx) / cx
+    y = (np.arange(h, dtype=np.float32) - cy) / cy
+    xx, yy = np.meshgrid(x, y)
+    r = np.sqrt(xx**2 + yy**2)
+
+    # Convert to angle theta
+    theta = r * np.radians(fov_deg / 2)
+
+    # Apply inverse projection model
+    if model == "stereographic":
+        r_corrected = 2 * np.tan(theta / 2)
+    elif model == "equisolid":
+        r_corrected = 2 * np.sin(theta / 2)
+    elif model == "equidistant":
+        r_corrected = theta
+    else:
+        raise ValueError("Unsupported model: choose stereographic, equisolid, or equidistant")
+
+    # Avoid division by zero
+    scale = np.where(r > 1e-8, r_corrected / r, 1.0) * zoom
+
+    map_x = (xx * scale * cx + cx).astype(np.float32)
+    map_y = (yy * scale * cy + cy).astype(np.float32)
+
+    # Remap using high-quality interpolation
+    undistorted = cv2.remap(image, map_x, map_y, interpolation=cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT101)
+    return undistorted, map_x, map_y
+📐 Step 2: Dimensional Analysis Using Reference Object
+python
+Copy
+Edit
+def pixels_per_cm(reference_pixel_length, real_length_cm):
+    """
+    Calculate pixels per cm from reference object.
+    
+    Args:
+        reference_pixel_length (float): length in pixels
+        real_length_cm (float): known real-world length in cm
+        
+    Returns:
+        scale: pixels per cm
+    """
+    return reference_pixel_length / real_length_cm
+
+def measure_distance(pt1, pt2, px_per_cm):
+    """
+    Measure real-world distance between two points in cm.
+    
+    Args:
+        pt1, pt2: (x, y) coordinates in pixels
+        px_per_cm: pixels per cm scaling factor
+        
+    Returns:
+        distance in cm
+    """
+    px_dist = np.linalg.norm(np.array(pt1) - np.array(pt2))
+    return px_dist / px_per_cm
+🛠️ How to Use This in Practice
+1. Capture Image With Known Object
+Place a ruler or object of known size in the image.
+
+2. Run Undistortion
+python
+Copy
+Edit
+undistorted, _, _ = undistort_fisheye_approx(image, model="stereographic", fov_deg=180)
+3. Mark Reference Points
+Use OpenCV cv2.setMouseCallback to mark two endpoints on the known object, or hardcode pixel coordinates.
+
+python
+Copy
+Edit
+reference_length_px = 250  # e.g. pixel distance between 10 cm object
+px_per_cm = pixels_per_cm(reference_length_px, 10)
+4. Measure in Image
+python
+Copy
+Edit
+real_distance = measure_distance((x1, y1), (x2, y2), px_per_cm)
+print(f"Measured: {real_distance:.2f} cm")
+✅ Why This Works for Your Case
+Preserves original resolution and dimensions ✅
+
+Undistortion removes major fisheye artifacts ✅
+
+Field of view remains wide enough for coverage ✅
+
+Dimensional accuracy is achieved via manual calibration (pixels-per-cm) ✅
+
+Would you like a full working GUI tool where you can:
+
+Select two points on the image
+
+Enter known real-world length
+
+Get real-world measurements from undistorted image?
+
+I can write that for you next.
+
+
+
+
+
+
+
+
