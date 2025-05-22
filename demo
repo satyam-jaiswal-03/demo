@@ -1,25 +1,4 @@
-import cv2
-import numpy as np
-
-def undistort_fisheye(image, strength=0.5, zoom=1.0, balance=0.0):
-    """
-    Improved fisheye undistortion without calibration.
-    
-    Args:
-        image: Input fisheye image (BGR format)
-        strength: Distortion correction strength (0.0 to 1.0)
-        zoom: Zoom factor (0.8 to 1.5) to adjust output crop
-        balance: Balance between linear and nonlinear correction (0.0 to 1.0)
-    Returns:
-        Undistorted image
-    """
-    if image is None:
-        raise ValueError("Input image is None")
-        
-    h, w = image.shape[:2]
-    
-    # Create normalized pixel coordinates
-    x = (np.arange(w, dtype=np.float32) - w * 0.5) / (w * 0.5)
+e(w, dtype=np.float32) - w * 0.5) / (w * 0.5)
     y = (np.arange(h, dtype=np.float32) - h * 0.5) / (h * 0.5)
     xx, yy = np.meshgrid(x, y)
     
@@ -43,31 +22,79 @@ def undistort_fisheye(image, strength=0.5, zoom=1.0, balance=0.0):
     new_x = new_x * zoom * (w * 0.5) + (w * 0.5)
     new_y = new_y * zoom * (h * 0.5) + (h * 0.5)
     
-    # Remap the image
+  )
+
+
+import cv2
+import numpy as np
+
+def undistort_fisheye_dimensionally_accurate(image, fov_degrees=180, output_resolution=None, preserve_edges=True):
+    """
+    Fisheye undistortion optimized for dimensional analysis.
+    
+    Args:
+        image: Input fisheye image (BGR format)
+        fov_degrees: Field of View of the fisheye lens (typically 180°)
+        output_resolution: (width, height) of output (None for input resolution)
+        preserve_edges: If True, keeps all original pixels (may leave black borders)
+    
+    Returns:
+        Undistorted image with metric preservation
+    """
+    h, w = image.shape[:2]
+    output_resolution = output_resolution or (w, h)
+    out_w, out_h = output_resolution
+    
+    # Convert FOV to radians
+    fov_rad = np.deg2rad(fov_degrees)
+    max_r = np.sin(fov_rad / 2)  # Maximum normalized radius for projection
+    
+    # Create output pixel grid
+    out_xx, out_yy = np.meshgrid(
+        np.linspace(-1, 1, out_w),
+        np.linspace(-1, 1, out_h)
+    
+    # Calculate input coordinates using equidistant projection
+    out_r = np.sqrt(out_xx**2 + out_yy**2)
+    theta = out_r * (fov_rad / 2)  # Scaled by FOV
+    
+    # Handle edge preservation
+    if preserve_edges:
+        valid_mask = (out_r <= 1.0)
+        theta = np.clip(theta, 0, fov_rad/2)
+    else:
+        valid_mask = (out_r <= max_r)
+    
+    # Avoid division by zero
+    mask = (out_r > 1e-8) & valid_mask
+    inv_out_r = np.zeros_like(out_r)
+    inv_out_r[mask] = 1.0 / out_r[mask]
+    
+    # Convert back to fisheye coordinates
+    in_r = np.tan(theta)  # Equidistant projection inverse
+    in_x = in_r * out_xx * inv_out_r
+    in_y = in_r * out_yy * inv_out_r
+    
+    # Scale to input image coordinates
+    map_x = (in_x * (w/2) + (w/2)).astype(np.float32)
+    map_y = (in_y * (h/2) + (h/2)).astype(np.float32)
+    
+    # Remap with high-quality interpolation
     undistorted = cv2.remap(
-        image, 
-        new_x.astype(np.float32), 
-        new_y.astype(np.float32), 
-        interpolation=cv2.INTER_LINEAR,
+        image, map_x, map_y,
+        interpolation=cv2.INTER_LANCZOS4,  # Best quality
         borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0, 0, 0)  # Black borders
-    )
+        borderValue=(0, 0, 0)
     
     return undistorted
 
-# Example usage with error handling
-try:
-    image = cv2.imread("fisheye_input.jpg")
-    if image is None:
-        raise FileNotFoundError("Could not load image")
-        
-    # Recommended starting parameters:
-    # - strength: 0.5-0.7 for moderate correction
-    # - zoom: 1.0-1.2 to compensate for edge stretching
-    # - balance: 0.3 for natural-looking results
-    undistorted = undistort_fisheye(image, strength=0.6, zoom=1.1, balance=0.3)
-    
-    cv2.imwrite("undistorted_output.jpg", undistorted)
-    print("Undistortion completed successfully")
-except Exception as e:
-    print(f"Error: {str(e)}")
+# Usage Example
+input_img = cv2.imread("fisheye_input.jpg")
+output_img = undistort_fisheye_dimensionally_accurate(
+    input_img,
+    fov_degrees=180,
+    output_resolution=(input_img.shape[1], input_img.shape[0]),  # Same resolution
+    preserve_edges=True
+)
+
+cv2.imwrite("undistorted_measurement_ready.jpg", output_img)
