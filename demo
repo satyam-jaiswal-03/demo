@@ -1,38 +1,48 @@
-const videoRef = useRef<HTMLVideoElement | null>(null);
+import React, { useState, useRef, useEffect } from 'react';
+
+const CameraCapture: React.FC = () => {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isCameraReady, setIsCameraReady] = useState(false);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [photoSaved, setPhotoSaved] = useState(false);
-  const [isCameraReady, setIsCameraReady] = useState(false);
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  // Start camera when modal opens
   useEffect(() => {
-    const startCamera = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play(); // Start playing
+    if (isModalOpen) {
+      const startCamera = async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            await videoRef.current.play();
+          }
+          streamRef.current = stream;
+        } catch (err) {
+          alert('Error accessing camera: ' + (err as Error).message);
         }
-        streamRef.current = stream;
-      } catch (err) {
-        alert('Error accessing camera: ' + (err as Error).message);
-      }
-    };
+      };
 
-    startCamera();
+      startCamera();
+    }
 
+    // Stop camera when modal closes
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
+      setIsCameraReady(false);
     };
-  }, []);
+  }, [isModalOpen]);
 
+  // Listen for video readiness
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     const handleReady = () => {
-      // Check if video has dimensions (optional check)
       if (video.videoWidth > 0 && video.videoHeight > 0) {
         setIsCameraReady(true);
       }
@@ -47,7 +57,7 @@ const videoRef = useRef<HTMLVideoElement | null>(null);
       video.removeEventListener('canplay', handleReady);
       video.removeEventListener('playing', handleReady);
     };
-  }, []);
+  }, [isModalOpen]);
 
   const takePhoto = () => {
     if (!isCameraReady) {
@@ -82,9 +92,69 @@ const videoRef = useRef<HTMLVideoElement | null>(null);
     if (imageBase64) {
       localStorage.setItem('capturedPhoto', imageBase64);
       setPhotoSaved(true);
+      setIsModalOpen(false);
+      alert('Photo saved to local storage!');
     }
   };
 
   return (
     <div>
-      <h2>Camera Capture</h2>
+      <button onClick={() => setIsModalOpen(true)}>Take Photo</button>
+
+      {isModalOpen && (
+        <div style={styles.modal}>
+          <div style={styles.modalContent}>
+            <h2>Camera Capture</h2>
+
+            {!imageBase64 ? (
+              <>
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  style={{ width: '100%', height: 'auto', backgroundColor: '#000' }}
+                />
+                <button onClick={takePhoto} disabled={!isCameraReady}>
+                  {isCameraReady ? 'Capture' : 'Loading...'}
+                </button>
+                <button onClick={() => setIsModalOpen(false)}>Close</button>
+              </>
+            ) : (
+              <>
+                <img src={imageBase64} alt="Captured" style={{ width: '100%', height: 'auto' }} />
+                <button onClick={retakePhoto}>Retake</button>
+                <button onClick={savePhoto}>Save</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const styles: { [key: string]: React.CSSProperties } = {
+  modal: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    width: '100vw',
+    height: '100vh',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    padding: '20px',
+    borderRadius: '8px',
+    maxWidth: '400px',
+    width: '90%',
+    textAlign: 'center',
+  },
+};
+
+export default CameraCapture;
