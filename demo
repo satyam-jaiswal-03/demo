@@ -1,48 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
 
-const CameraCapture: React.FC = () => {
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isCameraReady, setIsCameraReady] = useState(false);
-  const [imageBase64, setImageBase64] = useState<string | null>(null);
-  const [photoSaved, setPhotoSaved] = useState(false);
-
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-
-  // Start camera when modal opens
-  useEffect(() => {
-    if (isModalOpen) {
-      const startCamera = async () => {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            await videoRef.current.play();
-          }
-          streamRef.current = stream;
-        } catch (err) {
-          alert('Error accessing camera: ' + (err as Error).message);
-        }
-      };
-
-      startCamera();
-    }
-
-    // Stop camera when modal closes
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
-      setIsCameraReady(false);
-    };
-  }, [isModalOpen]);
-
-  // Listen for video readiness
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    const handleReady = () => {
+     {
       if (video.videoWidth > 0 && video.videoHeight > 0) {
         setIsCameraReady(true);
       }
@@ -158,3 +115,80 @@ const styles: { [key: string]: React.CSSProperties } = {
 };
 
 export default CameraCapture;
+
+
+
+
+
+
+const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isCameraReady, setIsCameraReady] = useState(false);
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  // Start or stop camera based on modal state
+  useEffect(() => {
+    if (isModalOpen) {
+      const startCamera = async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            await videoRef.current.play();
+          }
+          streamRef.current = stream;
+          setIsCameraReady(true);
+        } catch (err) {
+          alert('Error accessing camera: ' + (err as Error).message);
+        }
+      };
+      startCamera();
+    } else {
+      // Stop camera when modal closes
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+        setIsCameraReady(false);
+      }
+      setImageBase64(null); // Clear any captured image
+    }
+  }, [isModalOpen]);
+
+  const takePhoto = () => {
+    if (!isCameraReady) {
+      alert('Camera not ready yet!');
+      return;
+    }
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      alert('Error creating canvas context');
+      return;
+    }
+
+    ctx.drawImage(video, 0, 0);
+    const base64 = canvas.toDataURL('image/jpeg');
+    setImageBase64(base64);
+  };
+
+  const savePhoto = () => {
+    if (imageBase64) {
+      localStorage.setItem('capturedPhoto', imageBase64);
+      alert('Photo saved to local storage!');
+      setIsModalOpen(false);
+    }
+  };
+
+  const retakePhoto = () => {
+    setImageBase64(null);
+    // Camera remains active, so no need to restart
+  };
+
+  return (
