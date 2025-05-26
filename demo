@@ -453,3 +453,113 @@ export default CameraCapture;
 
 
 
+
+
+
+
+
+import React, { useRef, useState, useEffect } from 'react';
+
+const CameraCapture: React.FC = () => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [photoSaved, setPhotoSaved] = useState(false);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        streamRef.current = stream;
+      } catch (err) {
+        alert('Error accessing camera: ' + (err as Error).message);
+      }
+    };
+
+    startCamera();
+
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
+
+  const takePhoto = () => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
+      alert('Camera not ready yet!');
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      alert('Error creating canvas context');
+      return;
+    }
+
+    ctx.drawImage(video, 0, 0);
+    const base64 = canvas.toDataURL('image/jpeg');
+    setImageBase64(base64);
+    setPhotoSaved(false);
+  };
+
+  const retakePhoto = () => {
+    setImageBase64(null);
+    setPhotoSaved(false);
+  };
+
+  const savePhoto = () => {
+    if (imageBase64) {
+      localStorage.setItem('capturedPhoto', imageBase64);
+      setPhotoSaved(true);
+    }
+  };
+
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <h1>React Photo Capture</h1>
+
+      {!imageBase64 ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          style={{ width: '90%', maxWidth: '400px' }}
+        />
+      ) : (
+        <img
+          src={imageBase64}
+          alt="Captured"
+          style={{ width: '90%', maxWidth: '400px', border: '2px solid #333' }}
+        />
+      )}
+
+      <div style={{ marginTop: '10px' }}>
+        {!imageBase64 ? (
+          <button onClick={takePhoto}>Take Photo</button>
+        ) : (
+          <>
+            <button onClick={retakePhoto}>Retake</button>
+            <button onClick={savePhoto}>Save Photo</button>
+          </>
+        )}
+      </div>
+
+      {photoSaved && (
+        <div style={{ marginTop: '10px', color: 'green' }}>
+          Photo saved! You can use it elsewhere.
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default CameraCapture;
+
