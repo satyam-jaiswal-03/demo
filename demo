@@ -1,190 +1,4 @@
-import cv2
-import numpy as np
-from scipy.spatial import distance
-from skimage.measure import label, regionprops
 
-def undistort_fisheye(image, strength=0.5, zoom=1.0, balance=0.0):
-    """
-    Improved fisheye undistortion with area preservation and quality maintenance.
-    
-    Args:
-        image: Input fisheye image (BGR format)
-        strength: Distortion correction strength (0.0 to 1.0)
-        zoom: Zoom factor (0.8 to 1.5) to adjust output crop
-        balance: Balance between linear and nonlinear correction (0.0 to 1.0)
-    Returns:
-        Undistorted image with preserved area and quality
-    """
-    if image is None:
-        raise ValueError("Input image is None")
-        
-    h, w = image.shape[:2]
-    
-    # Create normalized pixel coordinates
-    x = (np.arange(w, dtype=np.float32) - w * 0.5) / (w * 0.5)
-    y = (np.arange(h, dtype=np.float32) - h * 0.5) / (h * 0.5)
-    xx, yy = np.meshgrid(x, y)
-    
-    # Calculate radial distance
-    r = np.sqrt(xx**2 + yy**2)
-    theta = np.arctan(r)  # More accurate than simple multiplication
-    
-    # Avoid division by zero at center
-    mask = r > 1e-8
-    inv_r = np.zeros_like(r)
-    inv_r[mask] = 1.0 / r[mask]
-    
-    # Enhanced correction formula with area preservation
-    correction = (1.0 - balance) * np.sin(theta * strength) + balance * (theta * strength)
-    
-    # Area preservation adjustment
-    area_factor = 1.0 / (1.0 + 0.2 * strength)  # Compensate for area changes
-    correction *= area_factor
-    
-    # Apply correction
-    new_x = xx * inv_r * correction
-    new_y = yy * inv_r * correction
-    
-    # Apply zoom and center with adjusted scaling for quality preservation
-    zoom_factor = zoom * (1.0 - 0.1 * strength)  # Compensate for edge stretching
-    new_x = new_x * zoom_factor * (w * 0.5) + (w * 0.5)
-    new_y = new_y * zoom_factor * (h * 0.5) + (h * 0.5)
-    
-    # High-quality remapping with Lanczos interpolation
-    undistorted = cv2.remap(
-        image, 
-        new_x.astype(np.float32), 
-        new_y.astype(np.float32), 
-        interpolation=cv2.INTER_LANCZOS4,
-        borderMode=cv2.BORDER_REFLECT101  # Better edge handling
-    )
-    
-    return undistorted
-
-def dimensional_analysis(image, reference_length_pixels, reference_length_units):
-    """
-    Perform dimensional analysis on objects in the image.
-    
-    Args:
-        image: Input image (BGR format)
-        reference_length_pixels: Known length in pixels
-        reference_length_units: Actual length in real-world units
-    Returns:
-        Dictionary containing measurements of detected objects
-    """
-    if image is None:
-        raise ValueError("Input image is None")
-        
-    # Convert to grayscale and enhance contrast
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    gray = cv2.equalizeHist(gray)
-    
-    # Apply adaptive thresholding
-    thresh = cv2.adaptiveThreshold(gray, 255, 
-                                  cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                  cv2.THRESH_BINARY_INV, 11, 2)
-    
-    # Remove small noise
-    kernel = np.ones((3,3), np.uint8)
-    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
-    
-    # Find contours
-    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Calculate pixel-to-unit conversion factor
-    pixel_to_unit = reference_length_units / reference_length_pixels
-    
-    measurements = []
-    min_contour_area = 100  # Minimum area to consider as valid object
-    
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if area < min_contour_area:
-            continue
-            
-        # Fit rotated rectangle
-        rect = cv2.minAreaRect(contour)
-        box = cv2.boxPoints(rect)
-        box = np.int0(box)
-        
-        # Calculate dimensions
-        width_px = min(rect[1])
-        height_px = max(rect[1])
-        
-        # Convert to real units
-        width_units = width_px * pixel_to_unit
-        height_units = height_px * pixel_to_unit
-        area_units = area * (pixel_to_unit ** 2)
-        
-        # Calculate perimeter
-        perimeter_px = cv2.arcLength(contour, True)
-        perimeter_units = perimeter_px * pixel_to_unit
-        
-        # Store measurements
-        measurements.append({
-            'width_px': width_px,
-            'height_px': height_px,
-            'width_units': width_units,
-            'height_units': height_units,
-            'area_px': area,
-            'area_units': area_units,
-            'perimeter_px': perimeter_px,
-            'perimeter_units': perimeter_units,
-            'aspect_ratio': width_px / height_px,
-            'centroid': rect[0]
-        })
-    
-    return measurements
-
-def draw_measurements(image, measurements):
-    """
-    Draw measurements on the image.
-    
-    Args:
-        image: Input image
-        measurements: List of measurement dictionaries
-    Returns:
-        Image with measurements drawn
-    """
-    output = image.copy()
-    
-    for meas in measurements:
-        center = tuple(map(int, meas['centroid']))
-        
-        # Draw bounding box
-        cv2.drawContours(output, [meas['bounding_box']], 0, (0, 255, 0), 2)
-        
-        # Draw dimensions
-        cv2.putText(output, f"W: {meas['width_units']:.2f} units", 
-                   (center[0]+20, center[1]-20), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-        cv2.putText(output, f"H: {meas['height_units']:.2f} units", 
-                   (center[0]+20, center[1]+0), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-        cv2.putText(output, f"A: {meas['area_units']:.2f} sq.units", 
-                   (center[0]+20, center[1]+20), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-    
-    return output
-
-# Example usage with error handling
-try:
-    # Load image
-    image = cv2.imread("fisheye_input.jpg")
-    if image is None:
-        raise FileNotFoundError("Could not load image")
-    
-    # Undistort with optimized parameters for area/quality preservation
-    undistorted = undistort_fisheye(image, strength=0.6, zoom=1.05, balance=0.3)
-    
-    # Perform dimensional analysis (requires a known reference measurement)
-    # For example, if a 100px object in the image is known to be 10cm in real life:
-    reference_length_pixels = 100  # Must be measured from the image
-    reference_length_units = 10.0  # In centimeters (or any unit)
-    
-    measurements = dimensional_analysis(undistorted, reference_length_pixels, reference_length_units)
-    
-    # Draw measurements on the image
     measured_image = draw_measurements(undistorted, measurements)
     
     # Save results
@@ -550,31 +364,92 @@ px_per_cm = pixels_per_cm(reference_length_px, 10)
 python
 Copy
 Edit
-real_distance = measure_distance((x1, y1), (x2, y2), px_per_cm)
-print(f"Measured: {real_distance:.2f} cm")
-✅ Why This Works for Your Case
-Preserves original resolution and dimensions ✅
-
-Undistortion removes major fisheye artifacts ✅
-
-Field of view remains wide enough for coverage ✅
-
-Dimensional accuracy is achieved via manual calibration (pixels-per-cm) ✅
-
-Would you like a full working GUI tool where you can:
-
-Select two points on the image
-
-Enter known real-world length
-
-Get real-world measurements from undistorted image?
-
-I can write that for you next.
 
 
 
 
 
+
+
+import React, { useRef, useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+const CameraCapture = () => {
+  const videoRef = useRef(null);
+  const photoRef = useRef(null);
+  const [imageBase64, setImageBase64] = useState(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    // Start camera on mount
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        alert('Error accessing camera: ' + err.message);
+      }
+    };
+
+    startCamera();
+
+    return () => {
+      // Cleanup: stop camera
+      if (videoRef.current?.srcObject) {
+        videoRef.current.srcObject.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
+
+  const takePhoto = () => {
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0);
+    const base64 = canvas.toDataURL('image/jpeg');
+    setImageBase64(base64);
+  };
+
+  const retakePhoto = () => {
+    setImageBase64(null);
+  };
+
+  const saveAndNext = () => {
+    if (imageBase64) {
+      localStorage.setItem('capturedImage', imageBase64);
+      navigate('/after-stitch');
+    }
+  };
+
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <h1>React Photo Capture</h1>
+
+      {!imageBase64 ? (
+        <video ref={videoRef} autoPlay playsInline style={{ width: '90%', maxWidth: '400px' }} />
+      ) : (
+        <img ref={photoRef} src={imageBase64} alt="Captured" style={{ width: '90%', maxWidth: '400px' }} />
+      )}
+
+      <div style={{ marginTop: '10px' }}>
+        {!imageBase64 ? (
+          <button onClick={takePhoto}>Take Photo</button>
+        ) : (
+          <>
+            <button onClick={retakePhoto}>Retake</button>
+            <button onClick={saveAndNext}>Save & Next</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default CameraCapture;
 
 
 
