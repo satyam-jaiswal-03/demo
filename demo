@@ -1,62 +1,4 @@
-
-     {
-      if (video.videoWidth > 0 && video.videoHeight > 0) {
-        setIsCameraReady(true);
-      }
-    };
-
-    video.addEventListener('loadedmetadata', handleReady);
-    video.addEventListener('canplay', handleReady);
-    video.addEventListener('playing', handleReady);
-
-    return () => {
-      video.removeEventListener('loadedmetadata', handleReady);
-      video.removeEventListener('canplay', handleReady);
-      video.removeEventListener('playing', handleReady);
-    };
-  }, [isModalOpen]);
-
-  const takePhoto = () => {
-    if (!isCameraReady) {
-      alert('Camera not ready yet!');
-      return;
-    }
-
-    const video = videoRef.current;
-    if (!video) return;
-
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      alert('Error creating canvas context');
-      return;
-    }
-
-    ctx.drawImage(video, 0, 0);
-    const base64 = canvas.toDataURL('image/jpeg');
-    setImageBase64(base64);
-    setPhotoSaved(false);
-  };
-
-  const retakePhoto = () => {
-    setImageBase64(null);
-    setPhotoSaved(false);
-  };
-
-  const savePhoto = () => {
-    if (imageBase64) {
-      localStorage.setItem('capturedPhoto', imageBase64);
-      setPhotoSaved(true);
-      setIsModalOpen(false);
-      alert('Photo saved to local storage!');
-    }
-  };
-
-  return (
-    <div>
-      <button onClick={() => setIsModalOpen(true)}>Take Photo</button>
+setIsModalOpen(true)}>Take Photo</button>
 
       {isModalOpen && (
         <div style={styles.modal}>
@@ -191,4 +133,29 @@ const [isModalOpen, setIsModalOpen] = useState(false);
     // Camera remains active, so no need to restart
   };
 
-  return (
+  const getImageBase64 = (imagePath) => {
+  return new Promise((resolve, reject) => {
+    // Fetch the image file
+    fetch(imagePath)
+      .then(response => response.blob())
+      .then(blob => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      })
+      .catch(reject);
+  });
+};
+
+// Usage example
+const imagePath = require('./deviation/your-image.jpg').default;
+
+getImageBase64(imagePath)
+  .then(base64 => {
+    console.log('Base64 string:', base64);
+    // Use the base64 string as needed
+  })
+  .catch(error => {
+    console.error('Error converting image to base64:', error);
+  });
