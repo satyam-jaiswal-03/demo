@@ -184,3 +184,50 @@ export const getImageBase64 = async (imageUrl: string): Promise<string> => {
     reader.readAsDataURL(blob);
   });
 };
+// Add this to global.d.ts
+declare class MediaStreamTrackProcessor {
+  constructor(options: { track: MediaStreamTrack });
+  readable: ReadableStream<VideoFrame>;
+}
+
+declare class MediaStreamTrackGenerator {
+  constructor(options: { kind: 'video' | 'audio' });
+  writable: WritableStream<VideoFrame>;
+}
+
+// Updated processVideoStream with fallback
+const processVideoStream = async (originalStream: MediaStream): Promise<MediaStream> => {
+  const videoTrack = originalStream.getVideoTracks()[0];
+  
+  if (!videoTrack) {
+    throw new Error("No video track found");
+  }
+
+  if (typeof MediaStreamTrackProcessor !== 'undefined' && 
+      typeof MediaStreamTrackGenerator !== 'undefined') {
+    // Use Insertable Streams API if available
+    const processor = new MediaStreamTrackProcessor({ track: videoTrack });
+    const generator = new MediaStreamTrackGenerator({ kind: 'video' });
+    
+    const transformer = new TransformStream({
+      async transform(frame: VideoFrame, controller) {
+        const deviation = await getDeviationForFrame(frame);
+        if (deviation < YOUR_THRESHOLD) {
+          controller.enqueue(frame);
+        } else {
+          frame.close();
+        }
+      }
+    });
+    
+    processor.readable.pipeThrough(transformer).pipeTo(generator.writable);
+    return new MediaStream([generator]);
+  } else {
+    // Fallback to Canvas
+    return fallbackCanvasProcessing(originalStream);
+  }
+};
+
+
+
+
