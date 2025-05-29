@@ -230,4 +230,97 @@ const processVideoStream = async (originalStream: MediaStream): Promise<MediaStr
 
 
 
+// global.d.ts
+export {};
+
+declare global {
+  interface Window {
+    MediaStreamTrackProcessor?: typeof MediaStreamTrackProcessor;
+    MediaStreamTrackGenerator?: typeof MediaStreamTrackGenerator;
+  }
+}
+
+interface MediaStreamTrackProcessor {
+  new (options: { track: MediaStreamTrack }): {
+    readable: ReadableStream<VideoFrame>;
+  };
+}
+
+interface MediaStreamTrackGenerator {
+  new (options: { kind: 'video' | 'audio' }): {
+    writable: WritableStream<VideoFrame>;
+  };
+}
+
+
+
+
+const processVideoStream = async (originalStream: MediaStream): Promise<MediaStream> => {
+  const videoTrack = originalStream.getVideoTracks()[0];
+  
+  if (!videoTrack) {
+    throw new Error("No video track found in the stream.");
+  }
+
+  // Check if Insertable Streams API is available (Chrome/Edge)
+  if (window.MediaStreamTrackProcessor && window.MediaStreamTrackGenerator) {
+    try {
+      const processor = new window.MediaStreamTrackProcessor({ track: videoTrack });
+      const generator = new window.MediaStreamTrackGenerator({ kind: 'video' });
+
+      const transformer = new TransformStream({
+        async transform(frame: VideoFrame, controller) {
+          const deviation = await calculateDeviation(frame); // Implement this
+          if (deviation < YOUR_THRESHOLD) {
+            controller.enqueue(frame);
+          } else {
+            frame.close(); // Avoid memory leaks
+          }
+        }
+      });
+
+      processor.readable
+        .pipeThrough(transformer)
+        .pipeTo(generator.writable);
+
+      return new MediaStream([generator]);
+    } catch (error) {
+      console.error("Insertable Streams API failed, falling back to canvas:", error);
+      return applyCanvasFilter(originalStream);
+    }
+  } else {
+    // Fallback for Firefox/Safari
+    return applyCanvasFilter(originalStream);
+  }
+};
+
+// Fallback for browsers without Insertable Streams API
+const applyCanvasFilter = (stream: MediaStream): MediaStream => {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+  const filteredStream = canvas.captureStream(30);
+  
+  const video = document.createElement('video');
+  video.srcObject = stream;
+  video.play();
+
+  let lastFrameTime = 0;
+  const processFrame = () => {
+    if (video.readyState >= video.HAVE_METADATA) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      const deviation = calculateDeviationFromVideo(video); // Implement this
+      if (deviation < YOUR_THRESHOLD) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      }
+    }
+    requestAnimationFrame(processFrame);
+  };
+
+  processFrame();
+  return filteredStream;
+};
+
+
 
