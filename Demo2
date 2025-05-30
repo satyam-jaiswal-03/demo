@@ -1,0 +1,79 @@
+import React, { useEffect, useRef, useState } from 'react';
+
+const FrameFilterComponent: React.FC = () => {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [badTimestamps] = useState<number[]>([1000000, 2000000, 3000000]); // Example timestamps in microseconds
+  const [filteredStream, setFilteredStream] = useState<MediaStream | null>(null);
+
+  useEffect(() => {
+    const processStream = async () => {
+      try {
+        // 1. Get user media stream (video only for example)
+        const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const [videoTrack] = mediaStream.getVideoTracks();
+
+        // 2. Create processor and generator
+        // @ts-ignore
+        const processor = new MediaStreamTrackProcessor({ track: videoTrack });
+        const reader = processor.readable.getReader();
+        // @ts-ignore
+        const generator = new MediaStreamTrackGenerator({ kind: 'video' });
+        const writer = generator.writable.getWriter();
+
+        // 3. Start filtering loop
+        const filterFrames = async () => {
+          while (true) {
+            const result = await reader.read();
+            if (result.done) {
+              console.log('No more frames.');
+              writer.close();
+              break;
+            }
+
+            const frame = result.value as VideoFrame;
+            const frameTimestamp = frame.timestamp; // in microseconds
+
+            if (badTimestamps.includes(frameTimestamp)) {
+              console.log(`Dropping frame at timestamp: ${frameTimestamp}`);
+              frame.close();
+              continue;
+            }
+
+            await writer.write(frame);
+            frame.close();
+          }
+        };
+
+        filterFrames();
+
+        // 4. Create filtered MediaStream from generator
+        const filteredStream = new MediaStream();
+        // @ts-ignore
+        filteredStream.addTrack(generator);
+
+        // Set to state
+        setFilteredStream(filteredStream);
+      } catch (error) {
+        console.error('Error in processing stream:', error);
+      }
+    };
+
+    processStream();
+  }, [badTimestamps]);
+
+  useEffect(() => {
+    if (videoRef.current && filteredStream) {
+      videoRef.current.srcObject = filteredStream;
+      videoRef.current.play();
+    }
+  }, [filteredStream]);
+
+  return (
+    <div>
+      <h2>Filtered Video Stream</h2>
+      <video ref={videoRef} width="640" height="480" autoPlay muted></video>
+    </div>
+  );
+};
+
+export default FrameFilterComponent;
