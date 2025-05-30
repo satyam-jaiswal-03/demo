@@ -250,3 +250,12 @@ export default VideoFilterComponent;
 
 Let me know if you’d like me to add any extra features to this solution! 
 
+declare class MediaStreamTrackProcessor<T extends VideoFrame | AudioData = VideoFrame> {
+  readonly readable: ReadableStream<T>;
+  constructor(init: { track: MediaStreamTrack });
+}
+
+declare class MediaStreamTrackGenerator<T extends VideoFrame | AudioData = VideoFrame> extends MediaStreamTrack {
+  readonly writable: WritableStream<T>;
+  constructor(init: { kind: 'video' | 'audio' });
+}
