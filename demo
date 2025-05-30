@@ -138,6 +138,105 @@ export default VideoFilterComponent;
 4️⃣ The canvas updates in real time, dropping the selected frames.
 
 ⸻
+import React, { useEffect, useRef, useState } from 'react';
+
+const VideoFilterComponent: React.FC = () => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [badTimestamps, setBadTimestamps] = useState<number[]>([]);
+  const [lastFrameTimestamp, setLastFrameTimestamp] = useState<number | null>(null);
+  const [isProcessorSupported, setIsProcessorSupported] = useState<boolean>(true);
+
+  useEffect(() => {
+    let videoTrack: MediaStreamTrack;
+    let processor: MediaStreamTrackProcessor | null = null;
+    let reader: ReadableStreamDefaultReader<VideoFrame> | null = null;
+    let animationFrameId: number;
+
+    const start = async () => {
+      if (typeof (window as any).MediaStreamTrackProcessor === 'undefined') {
+        console.error('MediaStreamTrackProcessor is not supported in this browser.');
+        setIsProcessorSupported(false);
+        return;
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      videoTrack = stream.getVideoTracks()[0];
+
+      // @ts-ignore
+      processor = new MediaStreamTrackProcessor({ track: videoTrack });
+      // @ts-ignore
+      reader = processor.readable.getReader();
+
+      const ctx = canvasRef.current?.getContext('2d');
+      if (!ctx) return;
+
+      const processFrame = async () => {
+        const result = await reader!.read();
+        if (result.done) {
+          console.log('Stream ended');
+          return;
+        }
+
+        const frame = result.value;
+
+        const timestamp = frame.timestamp;
+        setLastFrameTimestamp(timestamp);
+
+        const tolerance = 2000; // 2ms tolerance
+        const isBad = badTimestamps.some(badTs => Math.abs(badTs - timestamp) < tolerance);
+
+        if (!isBad) {
+          canvasRef.current.width = frame.displayWidth;
+          canvasRef.current.height = frame.displayHeight;
+          ctx.drawImage(frame, 0, 0);
+        } else {
+          console.log(`Dropped frame at timestamp: ${timestamp}`);
+        }
+
+        frame.close();
+
+        animationFrameId = requestAnimationFrame(processFrame);
+      };
+
+      processFrame();
+    };
+
+    start();
+
+    return () => {
+      if (reader) reader.cancel();
+      if (videoTrack) videoTrack.stop();
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [badTimestamps]);
+
+  const addCurrentTimestampAsBad = () => {
+    if (lastFrameTimestamp) {
+      setBadTimestamps(prev => [...prev, lastFrameTimestamp]);
+      console.log(`Added bad timestamp: ${lastFrameTimestamp}`);
+    }
+  };
+
+  return (
+    <div>
+      <h3>Video Feed (Filtered)</h3>
+      {!isProcessorSupported ? (
+        <p style={{ color: 'red' }}>Your browser does not support MediaStreamTrackProcessor. Please use Chrome 102+ or a compatible browser.</p>
+      ) : (
+        <>
+          <canvas ref={canvasRef} style={{ border: '1px solid black' }} />
+          <div style={{ marginTop: '10px' }}>
+            <button onClick={addCurrentTimestampAsBad}>Mark Current Timestamp as Bad</button>
+            <p>Last Frame Timestamp: {lastFrameTimestamp}</p>
+            <p>Bad Timestamps: {JSON.stringify(badTimestamps)}</p>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+export default VideoFilterComponent;
 
 🚀 Next Steps:
 
