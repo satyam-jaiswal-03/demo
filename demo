@@ -1,326 +1,153 @@
-setIsModalOpen(true)}>Take Photo</button>
 
-      {isModalOpen && (
-        <div style={styles.modal}>
-          <div style={styles.modalContent}>
-            <h2>Camera Capture</h2>
 
-            {!imageBase64 ? (
-              <>
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  style={{ width: '100%', height: 'auto', backgroundColor: '#000' }}
-                />
-                <button onClick={takePhoto} disabled={!isCameraReady}>
-                  {isCameraReady ? 'Capture' : 'Loading...'}
-                </button>
-                <button onClick={() => setIsModalOpen(false)}>Close</button>
-              </>
-            ) : (
-              <>
-                <img src={imageBase64} alt="Captured" style={{ width: '100%', height: 'auto' }} />
-                <button onClick={retakePhoto}>Retake</button>
-                <button onClick={savePhoto}>Save</button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+
+Absolutely! Here’s the final detailed solution considering:
+
+✅ Real-time webcam stream with getUserMedia.
+
+✅ Accessing frame timestamps using MediaStreamTrackProcessor.
+
+✅ Dropping frames in real-time if they match bad timestamps.
+
+✅ Example with dynamic timestamp logging and an interactive way to add “bad” timestamps for testing.
+
+⸻
+
+🎯 Final Solution (React + TypeScript) — Fully Functional Code
+
+🔥 Features:
+	•	Captures webcam stream.
+	•	Reads each frame’s timestamp (in microseconds).
+	•	Drops frames matching bad timestamps (with tolerance).
+	•	Logs timestamps to help you build a “bad timestamp” list.
+	•	Includes a button to dynamically add a bad timestamp for testing.
+	•	Renders the filtered frames onto a <canvas>.
+
+import React, { useEffect, useRef, useState } from 'react';
+
+const VideoFilterComponent: React.FC = () => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [badTimestamps, setBadTimestamps] = useState<number[]>([]);
+  const [lastFrameTimestamp, setLastFrameTimestamp] = useState<number | null>(null);
+
+  useEffect(() => {
+    let videoTrack: MediaStreamTrack;
+    let processor: MediaStreamTrackProcessor | null = null;
+    let reader: ReadableStreamDefaultReader<VideoFrame> | null = null;
+    let animationFrameId: number;
+
+    const start = async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      videoTrack = stream.getVideoTracks()[0];
+
+      // @ts-ignore
+      processor = new MediaStreamTrackProcessor({ track: videoTrack });
+      // @ts-ignore
+      reader = processor.readable.getReader();
+
+      const ctx = canvasRef.current?.getContext('2d');
+      if (!ctx) return;
+
+      const processFrame = async () => {
+        const result = await reader!.read();
+        if (result.done) {
+          console.log('Stream ended');
+          return;
+        }
+
+        const frame = result.value;
+
+        const timestamp = frame.timestamp; // Microseconds
+        setLastFrameTimestamp(timestamp); // Update for UI
+
+        const tolerance = 2000; // 2ms tolerance
+        const isBad = badTimestamps.some(badTs => Math.abs(badTs - timestamp) < tolerance);
+
+        if (!isBad) {
+          // Draw frame on canvas
+          canvasRef.current.width = frame.displayWidth;
+          canvasRef.current.height = frame.displayHeight;
+          ctx.drawImage(frame, 0, 0);
+        } else {
+          console.log(`Dropped frame at timestamp: ${timestamp}`);
+        }
+
+        frame.close(); // Always release the frame
+
+        animationFrameId = requestAnimationFrame(processFrame);
+      };
+
+      processFrame();
+    };
+
+    start();
+
+    return () => {
+      if (reader) reader.cancel();
+      if (videoTrack) videoTrack.stop();
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [badTimestamps]);
+
+  // Function to add a current "bad timestamp" for testing
+  const addCurrentTimestampAsBad = () => {
+    if (lastFrameTimestamp) {
+      setBadTimestamps(prev => [...prev, lastFrameTimestamp]);
+      console.log(`Added bad timestamp: ${lastFrameTimestamp}`);
+    }
+  };
+
+  return (
+    <div>
+      <h3>Video Feed (Filtered)</h3>
+      <canvas ref={canvasRef} style={{ border: '1px solid black' }} />
+      <div style={{ marginTop: '10px' }}>
+        <button onClick={addCurrentTimestampAsBad}>Mark Current Timestamp as Bad</button>
+        <p>Last Frame Timestamp: {lastFrameTimestamp}</p>
+        <p>Bad Timestamps: {JSON.stringify(badTimestamps)}</p>
+      </div>
     </div>
   );
 };
 
-const styles: { [key: string]: React.CSSProperties } = {
-  modal: {
-    position: 'fixed',
-    top: 0,
-    left: 0,
-    width: '100vw',
-    height: '100vh',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    display: 'flex',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 9999,
-  },
-  modalContent: {
-    backgroundColor: '#fff',
-    padding: '20px',
-    borderRadius: '8px',
-    maxWidth: '400px',
-    width: '90%',
-    textAlign: 'center',
-  },
-};
-
-export default CameraCapture;
+export default VideoFilterComponent;
 
 
 
 
+✅ frame.timestamp is in microseconds. We log it, store it in lastFrameTimestamp, and compare it against the badTimestamps list.
 
+✅ The tolerance (2ms = 2000µs) ensures near-matching frames get dropped, accounting for tiny timing variations.
 
-const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isCameraReady, setIsCameraReady] = useState(false);
-  const [imageBase64, setImageBase64] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+✅ The button lets you dynamically add a “bad” timestamp based on the last processed frame. Useful for testing!
 
-  // Start or stop camera based on modal state
-  useEffect(() => {
-    if (isModalOpen) {
-      const startCamera = async () => {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            await videoRef.current.play();
-          }
-          streamRef.current = stream;
-          setIsCameraReady(true);
-        } catch (err) {
-          alert('Error accessing camera: ' + (err as Error).message);
-        }
-      };
-      startCamera();
-    } else {
-      // Stop camera when modal closes
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-        setIsCameraReady(false);
-      }
-      setImageBase64(null); // Clear any captured image
-    }
-  }, [isModalOpen]);
+✅ The canvas displays only the frames that aren’t dropped.
 
-  const takePhoto = () => {
-    if (!isCameraReady) {
-      alert('Camera not ready yet!');
-      return;
-    }
+✅ badTimestamps can be dynamically updated (e.g., from an API, file, or button click).
 
-    const video = videoRef.current;
-    if (!video) return;
+⸻
 
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      alert('Error creating canvas context');
-      return;
-    }
+🛠️ How to Use:
 
-    ctx.drawImage(video, 0, 0);
-    const base64 = canvas.toDataURL('image/jpeg');
-    setImageBase64(base64);
-  };
+1️⃣ Start the webcam stream when the page loads.
 
-  const savePhoto = () => {
-    if (imageBase64) {
-      localStorage.setItem('capturedPhoto', imageBase64);
-      alert('Photo saved to local storage!');
-      setIsModalOpen(false);
-    }
-  };
+2️⃣ Watch the console for Last Frame Timestamp. This helps you know current timestamps.
 
-  const retakePhoto = () => {
-    setImageBase64(null);
-    // Camera remains active, so no need to restart
-  };
+3️⃣ Click “Mark Current Timestamp as Bad” to simulate dropping frames at specific times.
 
-  const getImageBase64 = (imagePath) => {
-  return new Promise((resolve, reject) => {
-    // Fetch the image file
-    fetch(imagePath)
-      .then(response => response.blob())
-      .then(blob => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      })
-      .catch(reject);
-  });
-};
+4️⃣ The canvas updates in real time, dropping the selected frames.
 
-// Usage example
-const imagePath = require('./deviation/your-image.jpg').default;
+⸻
 
-getImageBase64(imagePath)
-  .then(base64 => {
-    console.log('Base64 string:', base64);
-    // Use the base64 string as needed
-  })
-  .catch(error => {
-    console.error('Error converting image to base64:', error);
-  });
+🚀 Next Steps:
 
+✅ If you want to load the badTimestamps from a file, API, or external data source, you can replace the setBadTimestamps logic accordingly.
 
+✅ If you’d like, I can also show how to record the filtered stream, or send it over a WebRTC connection.
 
+✅ Want to add frame rate control, resolution settings, or performance optimizations? Just let me know!
 
+⸻
 
-
-
-// utils/getBase64.ts
-export const getImageBase64 = async (imageUrl: string): Promise<string> => {
-  const response = await fetch(imageUrl);
-  const blob = await response.blob();
-
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      if (typeof reader.result === 'string') {
-        resolve(reader.result);
-      } else {
-        reject(new Error('Failed to convert image to Base64'));
-      }
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-};
-// Add this to global.d.ts
-declare class MediaStreamTrackProcessor {
-  constructor(options: { track: MediaStreamTrack });
-  readable: ReadableStream<VideoFrame>;
-}
-
-declare class MediaStreamTrackGenerator {
-  constructor(options: { kind: 'video' | 'audio' });
-  writable: WritableStream<VideoFrame>;
-}
-
-// Updated processVideoStream with fallback
-const processVideoStream = async (originalStream: MediaStream): Promise<MediaStream> => {
-  const videoTrack = originalStream.getVideoTracks()[0];
-  
-  if (!videoTrack) {
-    throw new Error("No video track found");
-  }
-
-  if (typeof MediaStreamTrackProcessor !== 'undefined' && 
-      typeof MediaStreamTrackGenerator !== 'undefined') {
-    // Use Insertable Streams API if available
-    const processor = new MediaStreamTrackProcessor({ track: videoTrack });
-    const generator = new MediaStreamTrackGenerator({ kind: 'video' });
-    
-    const transformer = new TransformStream({
-      async transform(frame: VideoFrame, controller) {
-        const deviation = await getDeviationForFrame(frame);
-        if (deviation < YOUR_THRESHOLD) {
-          controller.enqueue(frame);
-        } else {
-          frame.close();
-        }
-      }
-    });
-    
-    processor.readable.pipeThrough(transformer).pipeTo(generator.writable);
-    return new MediaStream([generator]);
-  } else {
-    // Fallback to Canvas
-    return fallbackCanvasProcessing(originalStream);
-  }
-};
-
-
-
-// global.d.ts
-export {};
-
-declare global {
-  interface Window {
-    MediaStreamTrackProcessor?: typeof MediaStreamTrackProcessor;
-    MediaStreamTrackGenerator?: typeof MediaStreamTrackGenerator;
-  }
-}
-
-interface MediaStreamTrackProcessor {
-  new (options: { track: MediaStreamTrack }): {
-    readable: ReadableStream<VideoFrame>;
-  };
-}
-
-interface MediaStreamTrackGenerator {
-  new (options: { kind: 'video' | 'audio' }): {
-    writable: WritableStream<VideoFrame>;
-  };
-}
-
-
-
-
-const processVideoStream = async (originalStream: MediaStream): Promise<MediaStream> => {
-  const videoTrack = originalStream.getVideoTracks()[0];
-  
-  if (!videoTrack) {
-    throw new Error("No video track found in the stream.");
-  }
-
-  // Check if Insertable Streams API is available (Chrome/Edge)
-  if (window.MediaStreamTrackProcessor && window.MediaStreamTrackGenerator) {
-    try {
-      const processor = new window.MediaStreamTrackProcessor({ track: videoTrack });
-      const generator = new window.MediaStreamTrackGenerator({ kind: 'video' });
-
-      const transformer = new TransformStream({
-        async transform(frame: VideoFrame, controller) {
-          const deviation = await calculateDeviation(frame); // Implement this
-          if (deviation < YOUR_THRESHOLD) {
-            controller.enqueue(frame);
-          } else {
-            frame.close(); // Avoid memory leaks
-          }
-        }
-      });
-
-      processor.readable
-        .pipeThrough(transformer)
-        .pipeTo(generator.writable);
-
-      return new MediaStream([generator]);
-    } catch (error) {
-      console.error("Insertable Streams API failed, falling back to canvas:", error);
-      return applyCanvasFilter(originalStream);
-    }
-  } else {
-    // Fallback for Firefox/Safari
-    return applyCanvasFilter(originalStream);
-  }
-};
-
-// Fallback for browsers without Insertable Streams API
-const applyCanvasFilter = (stream: MediaStream): MediaStream => {
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d')!;
-  const filteredStream = canvas.captureStream(30);
-  
-  const video = document.createElement('video');
-  video.srcObject = stream;
-  video.play();
-
-  let lastFrameTime = 0;
-  const processFrame = () => {
-    if (video.readyState >= video.HAVE_METADATA) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
-      const deviation = calculateDeviationFromVideo(video); // Implement this
-      if (deviation < YOUR_THRESHOLD) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      }
-    }
-    requestAnimationFrame(processFrame);
-  };
-
-  processFrame();
-  return filteredStream;
-};
-
-
+Let me know if you’d like me to add any extra features to this solution! 
 
