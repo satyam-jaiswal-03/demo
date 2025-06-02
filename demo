@@ -259,3 +259,76 @@ declare class MediaStreamTrackGenerator<T extends VideoFrame | AudioData = Video
   readonly writable: WritableStream<T>;
   constructor(init: { kind: 'video' | 'audio' });
 }
+
+
+// Minimal WebCodecs type definitions
+
+interface VideoFrame {
+  readonly timestamp: number;
+  readonly duration: number | null;
+  readonly codedWidth: number;
+  readonly codedHeight: number;
+  readonly format: string;
+  close(): void;
+}
+
+interface AudioFrame {
+  readonly timestamp: number;
+  readonly duration: number | null;
+  readonly format: string;
+  readonly sampleRate: number;
+  readonly numberOfChannels: number;
+  readonly numberOfFrames: number;
+  close(): void;
+}
+
+declare var VideoFrame: {
+  prototype: VideoFrame;
+  new(init: VideoFrameInit): VideoFrame;
+};
+
+declare var AudioFrame: {
+  prototype: AudioFrame;
+  new(init: AudioFrameInit): AudioFrame;
+};
+
+// Optional: Add VideoFrameInit and AudioFrameInit if needed
+interface VideoFrameInit {
+  timestamp: number;
+  codedWidth: number;
+  codedHeight: number;
+  duration?: number;
+  format?: string;
+}
+
+interface AudioFrameInit {
+  timestamp: number;
+  sampleRate: number;
+  numberOfChannels: number;
+  numberOfFrames: number;
+  duration?: number;
+  format?: string;
+}
+
+import React from 'react';
+
+const AppRoutes: React.FC = () => {
+  const handleVideoFrame = (frame: VideoFrame) => {
+    console.log('Video Frame Timestamp:', frame.timestamp);
+    frame.close();
+  };
+
+  const handleAudioFrame = (frame: AudioFrame) => {
+    console.log('Audio Frame Sample Rate:', frame.sampleRate);
+    frame.close();
+  };
+
+  return (
+    <div>
+      <h1>App Routes</h1>
+      {/* Your routes/components */}
+    </div>
+  );
+};
+
+export default AppRoutes;
