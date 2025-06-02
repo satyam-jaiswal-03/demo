@@ -187,3 +187,140 @@ const VideoProcessor = () => {
 
 export default VideoProcessor;
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+import React, { useEffect, useRef, useState } from 'react';
+
+const DEVIATION_WINDOW_MS = 2000;    // Keep deviation events from last 2 seconds
+const DROP_THRESHOLD_US = 100_000;   // 100ms threshold for dropping frames
+
+const VideoProcessor = () => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const deviationTimestampsUs = useRef<number[]>([]);
+  const controllerRef = useRef<AbortController | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Report deviation (called externally)
+  const reportDeviation = (timestampMs: number) => {
+    const nowUs = Date.now() * 1000;
+    const deviationUs = timestampMs * 1000;
+
+    deviationTimestampsUs.current = [
+      ...deviationTimestampsUs.current.filter(ts => ts > nowUs - DEVIATION_WINDOW_MS * 1000),
+      deviationUs,
+    ];
+  };
+
+  // Expose reportDeviation globally
+  useEffect(() => {
+    (window as any).reportDeviation = reportDeviation;
+    return () => {
+      delete (window as any).reportDeviation;
+    };
+  }, []);
+
+  useEffect(() => {
+    let processedStream: MediaStream | null = null;
+
+    const startProcessing = async () => {
+      setIsProcessing(true);
+      setError(null);
+
+      const abortController = new AbortController();
+      controllerRef.current = abortController;
+
+      try {
+        const rawStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const videoTrack = rawStream.getVideoTracks()[0];
+        if (!videoTrack) throw new Error('No video track found');
+
+        const processor = new (window as any).MediaStreamTrackProcessor({ track: videoTrack });
+        const generator = new (window as any).MediaStreamTrackGenerator({ kind: 'video' });
+        processedStream = new MediaStream([generator]);
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = processedStream;
+          await videoRef.current.play().catch(() => {});
+        }
+
+        const reader = processor.readable.getReader();
+        const writer = generator.writable.getWriter();
+
+        const processFrames = async () => {
+          try {
+            while (true) {
+              const { done, value: frame } = await reader.read();
+              if (done || abortController.signal.aborted) break;
+              if (!frame) continue;
+
+              const timestamp = frame.timestamp;
+
+              const shouldDrop = deviationTimestampsUs.current.some(
+                devTs => Math.abs(devTs - timestamp) < DROP_THRESHOLD_US
+              );
+
+              if (!shouldDrop) {
+                await writer.write(frame);
+              }
+
+              frame.close();
+            }
+          } finally {
+            try {
+              await writer.close();
+            } catch {}
+            try {
+              reader.releaseLock();
+            } catch {}
+          }
+        };
+
+        processFrames();
+      } catch (err: any) {
+        console.error('Video processing error:', err);
+        setError(err?.message || 'Video processing failed');
+      } finally {
+        setIsProcessing(false);
+      }
+    };
+
+    startProcessing();
+
+    return () => {
+      controllerRef.current?.abort();
+      processedStream?.getTracks().forEach(track => track.stop());
+      setIsProcessing(false);
+    };
+  }, []);
+
+  return (
+    <div>
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        style={{ width: 480, height: 320, background: '#000' }}
+      />
+      <div>Status: {isProcessing ? 'Processing' : 'Stopped'}</div>
+      {error && <div style={{ color: 'red' }}>Error: {error}</div>}
+      <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>
+        Call <code>window.reportDeviation(Date.now())</code> in your deviation logic to drop frames!
+      </div>
+    </div>
+  );
+};
+
+export default VideoProcessor;
