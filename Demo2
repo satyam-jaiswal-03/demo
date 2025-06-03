@@ -324,3 +324,29 @@ const VideoProcessor = () => {
 };
 
 export default VideoProcessor;
+
+
+
+
+
+
+async function getFirstFrameTimestamp(track) {
+  const processor = new MediaStreamTrackProcessor({ track });
+  const reader = processor.readable.getReader();
+  
+  try {
+    const { value: firstFrame } = await reader.read();
+    const firstTimestamp = firstFrame.timestamp;
+    firstFrame.close(); // Don't forget to close the frame
+    return firstTimestamp;
+  } finally {
+    reader.releaseLock();
+    // Processor will be garbage collected
+  }
+}
+
+// Usage:
+const videoTrack = stream.getVideoTracks()[0];
+getFirstFrameTimestamp(videoTrack).then(timestamp => {
+  console.log("First frame timestamp:", timestamp);
+});
