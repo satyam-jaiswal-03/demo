@@ -350,3 +350,45 @@ const videoTrack = stream.getVideoTracks()[0];
 getFirstFrameTimestamp(videoTrack).then(timestamp => {
   console.log("First frame timestamp:", timestamp);
 });
+
+
+const [track] = stream.getVideoTracks();
+
+const processor = new MediaStreamTrackProcessor({ track });
+const reader = processor.readable.getReader();
+
+const generator = new MediaStreamTrackGenerator({ kind: 'video' });
+const writer = generator.writable.getWriter();
+
+// Replace original track in the same stream
+stream.removeTrack(track);
+stream.addTrack(generator);
+
+// Start processing frames
+const processFrames = async () => {
+  while (true) {
+    const result = await reader.read();
+    if (result.done) break;
+
+    const frame = result.value;
+
+    try {
+      // ✅ Apply your custom filter condition here
+      if (shouldKeepFrame(frame)) {
+        await writer.write(frame);
+      }
+      // else: drop the frame silently
+    } finally {
+      frame.close(); // always close
+    }
+  }
+
+  await writer.close();
+};
+
+const shouldKeepFrame = (frame: VideoFrame): boolean => {
+  // Example: keep all frames (replace with your logic)
+  return true;
+};
+
+processFrames();
