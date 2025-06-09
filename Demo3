@@ -1,81 +1,28 @@
+from defisheye import Defisheye
 import cv2
-import numpy as np
-from scipy.optimize import minimize
 
-# Undistort fisheye image using equidistant model
-def undistort_fisheye(img, fov_deg, output_size=None):
-    h, w = img.shape[:2]
-    if output_size is None:
-        out_h, out_w = h, w
-    else:
-        out_h, out_w = output_size
+# Load the fisheye image
+input_image_path = "fisheye_image.jpg"
+img = cv2.imread(input_image_path)
 
-    fov = np.deg2rad(fov_deg)
-    f = w / (2 * np.tan(fov / 2))
+# Configuration: projection='linear' (other options: 'cylindrical', 'stereographic', etc.)
+# You can tweak `fov_deg` and `pfov` if needed for better results
+params = {
+    "fov_deg": 180,       # Field of view in degrees (adjust based on your lens)
+    "pfov": 120,          # Perspective FOV (smaller = more zoomed)
+    "xcenter": 0.5,       # X-center of image (0 to 1, default 0.5)
+    "ycenter": 0.5,       # Y-center of image (0 to 1, default 0.5)
+    "projection": "linear"  # Output projection
+}
 
-    xx, yy = np.meshgrid(np.linspace(-1, 1, out_w), np.linspace(-1, 1, out_h))
-    theta = np.sqrt(xx**2 + yy**2) * (fov / 2)
-    theta[theta == 0] = 1e-8
+# Create Defisheye object
+d = Defisheye(img.shape[1], img.shape[0], **params)
 
-    r = f * theta
-    cx, cy = w / 2, h / 2
+# Undistort image
+undistorted_img = d.convert(img)
 
-    x_dir = xx / np.sqrt(xx**2 + yy**2)
-    y_dir = yy / np.sqrt(xx**2 + yy**2)
-
-    map_x = cx + r * x_dir
-    map_y = cy + r * y_dir
-
-    map_x = map_x.astype(np.float32)
-    map_y = map_y.astype(np.float32)
-
-    return cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
-
-# Compute curvature of Hough lines as distortion penalty
-def compute_line_curvature(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 80, 200, apertureSize=3)
-
-    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=80, minLineLength=60, maxLineGap=10)
-
-    if lines is None or len(lines) == 0:
-        return 1e6  # penalize if no lines
-
-    curvature_sum = 0
-    for line in lines:
-        x1, y1, x2, y2 = line[0]
-        dx = x2 - x1
-        dy = y2 - y1
-        length = np.sqrt(dx**2 + dy**2)
-        if length == 0:
-            continue
-        angle = np.arctan2(dy, dx)
-        curvature = min(abs(angle), abs(angle - np.pi / 2))  # deviation from straightness
-        curvature_sum += curvature * length  # weight by length
-
-    return curvature_sum / len(lines)
-
-# Loss function for optimizer
-def loss(fov_array, original_image):
-    fov_deg = float(fov_array)  # ✅ Fix: convert from ndarray to scalar
-    if fov_deg < 90 or fov_deg > 210:
-        return 1e6
-    undistorted = undistort_fisheye(original_image, fov_deg)
-    return compute_line_curvature(undistorted)
-
-# Optimize the FOV to minimize curvature
-def auto_undistort(img_path):
-    img = cv2.imread(img_path)
-
-    result = minimize(loss, x0=[180], args=(img,), bounds=[(120, 210)], method='Powell', options={'disp': True})
-
-    best_fov = float(result.x[0])  # ✅ Fix: scalar conversion
-    print(f"\n✅ Optimal FOV: {best_fov:.2f} degrees")
-
-    best_undistorted = undistort_fisheye(img, best_fov)
-    cv2.imwrite('undistorted_optimized.jpg', best_undistorted)
-    return best_undistorted, best_fov
-
-# === Run ===
-if __name__ == "__main__":
-    undistorted, best_fov = auto_undistort('fisheye.jpg')
+# Save or display result
+cv2.imwrite("undistorted_image.jpg", undistorted_img)
+cv2.imshow("Undistorted", undistorted_img)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
