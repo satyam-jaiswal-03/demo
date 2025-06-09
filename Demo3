@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from scipy.optimize import minimize
 
-# Undistort using equidistant fisheye model with a given FOV
+# Undistort fisheye image using equidistant model
 def undistort_fisheye(img, fov_deg, output_size=None):
     h, w = img.shape[:2]
     if output_size is None:
@@ -31,7 +31,7 @@ def undistort_fisheye(img, fov_deg, output_size=None):
 
     return cv2.remap(img, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
 
-# Calculate curvature (deviation from straight lines) using Hough lines
+# Compute curvature of Hough lines as distortion penalty
 def compute_line_curvature(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 80, 200, apertureSize=3)
@@ -39,7 +39,7 @@ def compute_line_curvature(image):
     lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=80, minLineLength=60, maxLineGap=10)
 
     if lines is None or len(lines) == 0:
-        return 1e6  # Penalize if no lines found
+        return 1e6  # penalize if no lines
 
     curvature_sum = 0
     for line in lines:
@@ -49,32 +49,33 @@ def compute_line_curvature(image):
         length = np.sqrt(dx**2 + dy**2)
         if length == 0:
             continue
-        # Deviation from perfectly horizontal or vertical
         angle = np.arctan2(dy, dx)
-        curvature = min(abs(angle - 0), abs(angle - np.pi/2))
-        curvature_sum += curvature * length  # Weighted by line length
+        curvature = min(abs(angle), abs(angle - np.pi / 2))  # deviation from straightness
+        curvature_sum += curvature * length  # weight by length
 
     return curvature_sum / len(lines)
 
-# Loss function to optimize
-def loss(fov_deg, original_image):
-    fov_deg = float(fov_deg)
-    if fov_deg < 90 or fov_deg > 210:  # reasonable FOV bounds
+# Loss function for optimizer
+def loss(fov_array, original_image):
+    fov_deg = float(fov_array)  # ✅ Fix: convert from ndarray to scalar
+    if fov_deg < 90 or fov_deg > 210:
         return 1e6
     undistorted = undistort_fisheye(original_image, fov_deg)
     return compute_line_curvature(undistorted)
 
-# Run optimization
+# Optimize the FOV to minimize curvature
 def auto_undistort(img_path):
     img = cv2.imread(img_path)
 
-    res = minimize(loss, x0=180, args=(img,), bounds=[(120, 210)], method='Powell', options={'disp': True})
+    result = minimize(loss, x0=[180], args=(img,), bounds=[(120, 210)], method='Powell', options={'disp': True})
 
-    print(f"✅ Optimal FOV: {res.x[0]:.2f} degrees")
+    best_fov = float(result.x[0])  # ✅ Fix: scalar conversion
+    print(f"\n✅ Optimal FOV: {best_fov:.2f} degrees")
 
-    best_undistorted = undistort_fisheye(img, res.x[0])
+    best_undistorted = undistort_fisheye(img, best_fov)
     cv2.imwrite('undistorted_optimized.jpg', best_undistorted)
-    return best_undistorted, res.x[0]
+    return best_undistorted, best_fov
 
 # === Run ===
-undistorted, best_fov = auto_undistort('fisheye.jpg')
+if __name__ == "__main__":
+    undistorted, best_fov = auto_undistort('fisheye.jpg')
