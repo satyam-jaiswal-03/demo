@@ -1,28 +1,35 @@
-from defisheye import Defisheye
-import cv2
+const convertImage = async () => {
+  const src = 'your-image-src-here'; // e.g., from state, props, or a ref
+  try {
+    const base64 = await imageSrcToBase64(src);
+    console.log('Base64 string:', base64);
+    // Use base64 as needed
+  } catch (err) {
+    console.error('Failed to convert image:', err);
+  }
+};
 
-# Load the fisheye image
-input_image_path = "fisheye_image.jpg"
-img = cv2.imread(input_image_path)
 
-# Configuration: projection='linear' (other options: 'cylindrical', 'stereographic', etc.)
-# You can tweak `fov_deg` and `pfov` if needed for better results
-params = {
-    "fov_deg": 180,       # Field of view in degrees (adjust based on your lens)
-    "pfov": 120,          # Perspective FOV (smaller = more zoomed)
-    "xcenter": 0.5,       # X-center of image (0 to 1, default 0.5)
-    "ycenter": 0.5,       # Y-center of image (0 to 1, default 0.5)
-    "projection": "linear"  # Output projection
-}
 
-# Create Defisheye object
-d = Defisheye(img.shape[1], img.shape[0], **params)
+const imageSrcToBase64 = (src: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous'; // Needed for cross-origin images
 
-# Undistort image
-undistorted_img = d.convert(img)
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
 
-# Save or display result
-cv2.imwrite("undistorted_image.jpg", undistorted_img)
-cv2.imshow("Undistorted", undistorted_img)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject('Canvas context not available');
+
+      ctx.drawImage(img, 0, 0);
+      const dataURL = canvas.toDataURL('image/png');
+      resolve(dataURL);
+    };
+
+    img.onerror = (err) => reject(err);
+    img.src = src;
+  });
+};
