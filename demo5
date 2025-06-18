@@ -1,0 +1,348 @@
+
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+
+// TypeScript interfaces
+interface Point {
+  x: number;
+  y: number;
+}
+
+interface Line {
+  start: Point;
+  end: Point;
+  dimension?: string;
+  id: string;
+  isMeasured: boolean;
+}
+
+interface DimensionProps {
+  imageUrl?: string;
+}
+
+// Mock API function to calculate dimension
+const calculateDimensionAPI = async (startPoint: Point, endPoint: Point, imageUrl?: string): Promise<string> => {
+  // Calculate Euclidean distance between two points
+  const dx = endPoint.x - startPoint.x;
+  const dy = endPoint.y - startPoint.y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+
+  // Simulate API call delay
+  await new Promise(resolve => setTimeout(resolve, 300));
+
+  return `${distance.toFixed(2)} units`;
+};
+
+const Dimension: React.FC<DimensionProps> = ({ imageUrl = "https://via.placeholder.com/800x600/cccccc/666666?text=Sample+Image" }) => {
+  const [lines, setLines] = useState<Line[]>([]);
+  const [isDrawing, setIsDrawing] = useState<boolean>(false);
+  const [startPoint, setStartPoint] = useState<Point | null>(null);
+  const [currentPoint, setCurrentPoint] = useState<Point | null>(null);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [dragLineId, setDragLineId] = useState<string | null>(null);
+  const [dragPointType, setDragPointType] = useState<'start' | 'end' | null>(null);
+  const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
+
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  // Generate unique ID for each line
+  const generateId = (): string => {
+    return Date.now().toString(36) + Math.random().toString(36).substr(2);
+  };
+
+  // Get mouse position relative to SVG
+  const getMousePosition = useCallback((event: React.MouseEvent<SVGSVGElement>): Point => {
+    if (!svgRef.current) return { x: 0, y: 0 };
+
+    const svg = svgRef.current;
+    const rect = svg.getBoundingClientRect();
+    const viewBox = svg.viewBox.baseVal;
+
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * viewBox.width,
+      y: ((event.clientY - rect.top) / rect.height) * viewBox.height
+    };
+  }, []);
+
+  // Handle SVG click events
+  const handleSVGClick = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
+    if (isDragging) return;
+
+    const point = getMousePosition(event);
+
+    if (!isDrawing) {
+      // Start drawing a new line
+      setIsDrawing(true);
+      setStartPoint(point);
+      setCurrentPoint(point);
+      setSelectedLineId(null);
+    } else {
+      // Complete the line
+      if (startPoint) {
+        const newLine: Line = {
+          id: generateId(),
+          start: startPoint,
+          end: point,
+          isMeasured: false
+        };
+
+        setLines(prev => [...prev, newLine]);
+        setSelectedLineId(newLine.id);
+        setIsDrawing(false);
+        setStartPoint(null);
+        setCurrentPoint(null);
+      }
+    }
+  }, [isDrawing, startPoint, isDragging, getMousePosition]);
+
+  // Handle mouse move for drawing preview
+  const handleMouseMove = useCallback((event: React.MouseEvent<SVGSVGElement>) => {
+    if (isDrawing && startPoint && !isDragging) {
+      const point = getMousePosition(event);
+      setCurrentPoint(point);
+    }
+
+    if (isDragging && dragLineId && dragPointType) {
+      const point = getMousePosition(event);
+      setLines(prev => prev.map(line => {
+        if (line.id === dragLineId && !line.isMeasured) {
+          return {
+            ...line,
+            [dragPointType]: point
+          };
+        }
+        return line;
+      }));
+    }
+  }, [isDrawing, startPoint, isDragging, dragLineId, dragPointType, getMousePosition]);
+
+  // Handle mouse up to stop dragging
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+    setDragLineId(null);
+    setDragPointType(null);
+  }, []);
+
+  // Handle point drag start
+  const handlePointMouseDown = useCallback((event: React.MouseEvent, lineId: string, pointType: 'start' | 'end') => {
+    event.stopPropagation();
+
+    const line = lines.find(l => l.id === lineId);
+    if (line && !line.isMeasured) {
+      setIsDragging(true);
+      setDragLineId(lineId);
+      setDragPointType(pointType);
+      setSelectedLineId(lineId);
+    }
+  }, [lines]);
+
+  // Handle measure button click
+  const handleMeasure = useCallback(async () => {
+    if (!selectedLineId) return;
+
+    const line = lines.find(l => l.id === selectedLineId);
+    if (!line || line.isMeasured) return;
+
+    try {
+      const dimension = await calculateDimensionAPI(line.start, line.end, imageUrl);
+
+      setLines(prev => prev.map(l => 
+        l.id === selectedLineId 
+          ? { ...l, dimension, isMeasured: true }
+          : l
+      ));
+
+      setSelectedLineId(null);
+    } catch (error) {
+      console.error('Error calculating dimension:', error);
+    }
+  }, [selectedLineId, lines, imageUrl]);
+
+  // Add event listeners for mouse up
+  useEffect(() => {
+    const handleGlobalMouseUp = () => handleMouseUp();
+
+    document.addEventListener('mouseup', handleGlobalMouseUp);
+    return () => document.removeEventListener('mouseup', handleGlobalMouseUp);
+  }, [handleMouseUp]);
+
+  return (
+    <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
+      <h2>Dimension Measurement Tool</h2>
+
+      <div style={{ marginBottom: '20px' }}>
+        <h3>Instructions:</h3>
+        <ol>
+          <li>Click to set a start point</li>
+          <li>Move mouse and click again to set end point</li>
+          <li>Drag endpoints to adjust the line (before measuring)</li>
+          <li>Click "Measure" to calculate dimension</li>
+          <li>After measuring, the line becomes fixed</li>
+        </ol>
+      </div>
+
+      <div style={{ border: '2px solid #ccc', borderRadius: '8px', padding: '10px', backgroundColor: '#f9f9f9' }}>
+        <svg
+          ref={svgRef}
+          width="800"
+          height="600"
+          viewBox="0 0 800 600"
+          style={{ 
+            border: '1px solid #ddd', 
+            backgroundColor: 'white',
+            cursor: isDrawing ? 'crosshair' : 'default'
+          }}
+          onClick={handleSVGClick}
+          onMouseMove={handleMouseMove}
+        >
+          {/* Background Image */}
+          <image
+            href={imageUrl}
+            x="0"
+            y="0"
+            width="800"
+            height="600"
+            preserveAspectRatio="xMidYMid slice"
+          />
+
+          {/* Drawing preview line (dashed) */}
+          {isDrawing && startPoint && currentPoint && (
+            <line
+              x1={startPoint.x}
+              y1={startPoint.y}
+              x2={currentPoint.x}
+              y2={currentPoint.y}
+              stroke="#007bff"
+              strokeWidth="2"
+              strokeDasharray="5,5"
+              opacity="0.7"
+            />
+          )}
+
+          {/* Rendered lines */}
+          {lines.map(line => (
+            <g key={line.id}>
+              {/* Line */}
+              <line
+                x1={line.start.x}
+                y1={line.start.y}
+                x2={line.end.x}
+                y2={line.end.y}
+                stroke={line.isMeasured ? "#28a745" : (selectedLineId === line.id ? "#007bff" : "#6c757d")}
+                strokeWidth="3"
+                opacity={line.isMeasured ? "1" : "0.8"}
+              />
+
+              {/* Start point */}
+              <circle
+                cx={line.start.x}
+                cy={line.start.y}
+                r="6"
+                fill={line.isMeasured ? "#28a745" : (selectedLineId === line.id ? "#007bff" : "#6c757d")}
+                stroke="white"
+                strokeWidth="2"
+                style={{ cursor: line.isMeasured ? 'default' : 'pointer' }}
+                onMouseDown={(e) => handlePointMouseDown(e, line.id, 'start')}
+              />
+
+              {/* End point */}
+              <circle
+                cx={line.end.x}
+                cy={line.end.y}
+                r="6"
+                fill={line.isMeasured ? "#28a745" : (selectedLineId === line.id ? "#007bff" : "#6c757d")}
+                stroke="white"
+                strokeWidth="2"
+                style={{ cursor: line.isMeasured ? 'default' : 'pointer' }}
+                onMouseDown={(e) => handlePointMouseDown(e, line.id, 'end')}
+              />
+
+              {/* Dimension text */}
+              {line.dimension && (
+                <text
+                  x={(line.start.x + line.end.x) / 2}
+                  y={(line.start.y + line.end.y) / 2 - 10}
+                  textAnchor="middle"
+                  fill="#28a745"
+                  fontSize="14"
+                  fontWeight="bold"
+                  style={{ userSelect: 'none' }}
+                >
+                  {line.dimension}
+                </text>
+              )}
+            </g>
+          ))}
+
+          {/* Start point for current drawing */}
+          {isDrawing && startPoint && (
+            <circle
+              cx={startPoint.x}
+              cy={startPoint.y}
+              r="6"
+              fill="#007bff"
+              stroke="white"
+              strokeWidth="2"
+            />
+          )}
+        </svg>
+
+        <div style={{ marginTop: '10px' }}>
+          <button
+            onClick={handleMeasure}
+            disabled={!selectedLineId || lines.find(l => l.id === selectedLineId)?.isMeasured}
+            style={{
+              padding: '10px 20px',
+              backgroundColor: selectedLineId && !lines.find(l => l.id === selectedLineId)?.isMeasured ? '#007bff' : '#6c757d',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: selectedLineId && !lines.find(l => l.id === selectedLineId)?.isMeasured ? 'pointer' : 'not-allowed',
+              marginRight: '10px'
+            }}
+          >
+            Measure
+          </button>
+
+          <button
+            onClick={() => {
+              setLines([]);
+              setIsDrawing(false);
+              setStartPoint(null);
+              setCurrentPoint(null);
+              setSelectedLineId(null);
+            }}
+            style={{
+              padding: '10px 20px',
+              backgroundColor: '#dc3545',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Reset All
+          </button>
+        </div>
+      </div>
+
+      {/* Measurements List */}
+      {lines.length > 0 && (
+        <div style={{ marginTop: '20px' }}>
+          <h3>Measurements:</h3>
+          <ul>
+            {lines.map(line => (
+              <li key={line.id} style={{ marginBottom: '5px' }}>
+                Line {line.id.substr(0, 6)}... - 
+                Start: ({line.start.x.toFixed(1)}, {line.start.y.toFixed(1)}) - 
+                End: ({line.end.x.toFixed(1)}, {line.end.y.toFixed(1)}) - 
+                {line.dimension ? `Dimension: ${line.dimension}` : 'Not measured'}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Dimension;
