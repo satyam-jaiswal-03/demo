@@ -1,0 +1,187 @@
+import React, { useRef, useState } from "react";
+
+type Point = { x: number; y: number };
+type Line = { start: Point; end: Point; dimension: string | null };
+
+const Dimension: React.FC = () => {
+  const [lines, setLines] = useState<Line[]>([]);
+  const [drawing, setDrawing] = useState<boolean>(false);
+  const [currentLine, setCurrentLine] = useState<Line | null>(null);
+  const [draggingPoint, setDraggingPoint] = useState<{ lineIdx: number; point: "start" | "end" } | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  // Convert mouse event to SVG coordinates
+  const getSvgCoords = (e: React.MouseEvent) => {
+    const svg = svgRef.current!;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const cursorpt = pt.matrixTransform(svg.getScreenCTM()!.inverse());
+    return { x: cursorpt.x, y: cursorpt.y };
+  };
+
+  // Start drawing a new line
+  const handleSvgMouseDown = (e: React.MouseEvent) => {
+    if (drawing || draggingPoint) return;
+    const start = getSvgCoords(e);
+    setCurrentLine({ start, end: start, dimension: null });
+    setDrawing(true);
+  };
+
+  // Update line while dragging
+  const handleSvgMouseMove = (e: React.MouseEvent) => {
+    if (drawing && currentLine) {
+      const end = getSvgCoords(e);
+      setCurrentLine({ ...currentLine, end });
+    } else if (draggingPoint) {
+      const { lineIdx, point } = draggingPoint;
+      const pos = getSvgCoords(e);
+      setLines((prev) =>
+        prev.map((line, idx) =>
+          idx === lineIdx && line.dimension === null
+            ? { ...line, [point]: pos }
+            : line
+        )
+      );
+    }
+  };
+
+  // Finish drawing a new line
+  const handleSvgMouseUp = (e: React.MouseEvent) => {
+    if (drawing && currentLine) {
+      const end = getSvgCoords(e);
+      setLines((prev) => [...prev, { ...currentLine, end }]);
+      setCurrentLine(null);
+      setDrawing(false);
+    }
+    setDraggingPoint(null);
+  };
+
+  // Start dragging an endpoint
+  const handleCircleMouseDown = (lineIdx: number, point: "start" | "end") => (e: React.MouseEvent) => {
+    if (lines[lineIdx].dimension !== null) return;
+    e.stopPropagation();
+    setDraggingPoint({ lineIdx, point });
+  };
+
+  // Call API to measure and lock the line
+  const handleMeasure = async (idx: number) => {
+    const line = lines[idx];
+    // Replace with your actual API call
+    const dimension = await fakeApiMeasure(line.start, line.end);
+    setLines((prev) =>
+      prev.map((l, i) => (i === idx ? { ...l, dimension } : l))
+    );
+  };
+
+  // Fake API for demonstration
+  const fakeApiMeasure = async (start: Point, end: Point) => {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    return Promise.resolve(`${Math.sqrt(dx * dx + dy * dy).toFixed(2)} px`);
+  };
+
+  return (
+    <div>
+      <svg
+        ref={svgRef}
+        width={800}
+        height={600}
+        style={{ border: "1px solid #ccc", background: "#f9f9f9" }}
+        onMouseDown={handleSvgMouseDown}
+        onMouseMove={handleSvgMouseMove}
+        onMouseUp={handleSvgMouseUp}
+      >
+        {/* Render image here */}
+        <image href="your-image-url.jpg" x={0} y={0} width={800} height={600} />
+        {/* Render existing lines */}
+        {lines.map((line, idx) => (
+          <g key={idx}>
+            <line
+              x1={line.start.x}
+              y1={line.start.y}
+              x2={line.end.x}
+              y2={line.end.y}
+              stroke="blue"
+              strokeWidth={2}
+              strokeDasharray={line.dimension ? "0" : "6,4"}
+            />
+            {/* Endpoints (draggable before measure) */}
+            <circle
+              cx={line.start.x}
+              cy={line.start.y}
+              r={8}
+              fill={line.dimension ? "#aaa" : "red"}
+              style={{ cursor: line.dimension ? "default" : "pointer" }}
+              onMouseDown={handleCircleMouseDown(idx, "start")}
+            />
+            <circle
+              cx={line.end.x}
+              cy={line.end.y}
+              r={8}
+              fill={line.dimension ? "#aaa" : "red"}
+              style={{ cursor: line.dimension ? "default" : "pointer" }}
+              onMouseDown={handleCircleMouseDown(idx, "end")}
+            />
+            {/* Dimension label */}
+            {line.dimension && (
+              <text
+                x={(line.start.x + line.end.x) / 2}
+                y={(line.start.y + line.end.y) / 2 - 10}
+                fill="black"
+                fontSize={16}
+                textAnchor="middle"
+              >
+                {line.dimension}
+              </text>
+            )}
+            {/* Measure button (only if not measured) */}
+            {!line.dimension && (
+              <foreignObject
+                x={(line.start.x + line.end.x) / 2 - 30}
+                y={(line.start.y + line.end.y) / 2 - 30}
+                width={60}
+                height={30}
+              >
+                <button
+                  style={{ width: "60px", height: "30px" }}
+                  onClick={() => handleMeasure(idx)}
+                >
+                  Measure
+                </button>
+              </foreignObject>
+            )}
+          </g>
+        ))}
+        {/* Render current line while drawing */}
+        {drawing && currentLine && (
+          <g>
+            <line
+              x1={currentLine.start.x}
+              y1={currentLine.start.y}
+              x2={currentLine.end.x}
+              y2={currentLine.end.y}
+              stroke="blue"
+              strokeWidth={2}
+              strokeDasharray="6,4"
+            />
+            <circle
+              cx={currentLine.start.x}
+              cy={currentLine.start.y}
+              r={8}
+              fill="red"
+            />
+            <circle
+              cx={currentLine.end.x}
+              cy={currentLine.end.y}
+              r={8}
+              fill="red"
+            />
+          </g>
+        )}
+      </svg>
+    </div>
+  );
+};
+
+export default Dimension;
