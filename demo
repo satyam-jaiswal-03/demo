@@ -9,8 +9,8 @@ class OptimizedDetector:
         self.camera = cv2.VideoCapture(0)
         if not self.camera.isOpened():
             print("Error: Could not open camera")
-            return
-            
+            exit(1)
+        
         # Camera properties
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -34,14 +34,12 @@ class OptimizedDetector:
         
         # Selected object storage
         self.selected_object = None
-        self.last_selection_time = 0
 
     def capture_frames(self):
         """Dedicated thread for fast frame capture"""
         while self.running:
             ret, frame = self.camera.read()
             if ret:
-                # Resize for faster processing
                 frame = cv2.resize(frame, (640, 480))
                 
                 if self.frame_queue.full():
@@ -54,13 +52,11 @@ class OptimizedDetector:
                 time.sleep(0.01)
 
     def detect_objects(self, frame):
-        """Optimized object detection"""
+        """Detect circles and ellipses"""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Fast Gaussian blur for noise reduction
         blurred = cv2.GaussianBlur(gray, (7, 7), 1.5)
         
-        # Detect circles with optimized parameters
+        # Circles
         circles = cv2.HoughCircles(
             blurred, 
             cv2.HOUGH_GRADIENT, 
@@ -79,26 +75,21 @@ class OptimizedDetector:
             for i in circles[0, :]:
                 detected.append(('circle', (i[0], i[1]), i[2]))
         
-        # Fast contour detection for ellipses
+        # Ellipses
         edges = cv2.Canny(blurred, 30, 100)
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         for contour in contours:
             if len(contour) < 5:
                 continue
-                
-            # Convex hull for faster ellipse fitting
             hull = cv2.convexHull(contour)
             if len(hull) < 5:
                 continue
-                
             try:
                 ellipse = cv2.fitEllipse(hull)
                 (center, axes, angle) = ellipse
                 major_axis = max(axes)
                 minor_axis = min(axes)
-                
-                # Fast size and ratio check
                 if 10 < minor_axis < 150 and 0.3 < minor_axis/major_axis < 1.0:
                     detected.append(('ellipse', (int(center[0]), int(center[1])), 
                                    (int(axes[0]/2), int(axes[1]/2), angle)))
@@ -111,71 +102,67 @@ class OptimizedDetector:
         """Handle object selection by mouse click"""
         if event == cv2.EVENT_LBUTTONDOWN:
             self.selected_object = (x, y)
-            self.last_selection_time = time.time()
 
     def process_frame(self, frame):
-        """Process frame with detection and highlighting"""
-        # Detect objects if not processing too frequently
-        if time.time() - self.last_selection_time > 0.1:  # 10 FPS detection
-            detected = self.detect_objects(frame)
-        else:
-            detected = []
-        
-        # Highlight detected objects
+        """Detect, highlight, and handle selection"""
+        detected = self.detect_objects(frame)
         display_frame = frame.copy()
-        for obj_type, center, params in detected:
-            color = (0, 0, 255)  # Red for detection
-            
-            # Highlight if near selection point
-            if self.selected_object:
-                dist = np.sqrt((center[0] - self.selected_object[0])**2 + 
-                              (center[1] - self.selected_object[1])**2)
-                if dist < (params[0] if obj_type == 'circle' else max(params[0], params[1])):
-                    color = (0, 255, 0)  # Green for selection
-                    self.store_object(frame, obj_type, center, params)
-            
-            # Draw the object
-            if obj_type == 'circle':
-                cv2.circle(display_frame, center, params, color, 2)
-            else:
-                cv2.ellipse(display_frame, center, (params[0], params[1]), 
-                           params[2], 0, 360, color, 2)
+        overlay = np.zeros_like(display_frame, dtype=np.uint8)
         
-        return display_frame
+        for obj_type, center, params in detected:
+            mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+            
+            if obj_type == 'circle':
+                cv2.circle(mask, center, params, 255, -1)
+            else:
+                cv2.ellipse(mask, center, (params[0], params[1]), params[2], 0, 360, 255, -1)
+            
+            blue_overlay = np.zeros_like(display_frame, dtype=np.uint8)
+            blue_overlay[:] = (255, 0, 0)  # Blue color
+            
+            overlay = cv2.add(overlay, cv2.bitwise_and(blue_overlay, blue_overlay, mask=mask))
+            
+            if self.selected_object:
+                dist = np.linalg.norm(np.array(center) - np.array(self.selected_object))
+                if dist < (params if obj_type == 'circle' else max(params[0], params[1])):
+                    self.store_object(frame, obj_type, center, params)
+                    self.running = False
+                    break
+        
+        combined = cv2.addWeighted(display_frame, 1.0, overlay, 0.3, 0)
+        return combined
 
     def store_object(self, frame, obj_type, center, params):
-        """Store and display selected object"""
-        # Create mask
+        """Store, display, and exit"""
         mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-        
         if obj_type == 'circle':
             cv2.circle(mask, center, params, 255, -1)
             radius = params
         else:
-            cv2.ellipse(mask, center, (params[0], params[1]), 
-                       params[2], 0, 360, 255, -1)
+            cv2.ellipse(mask, center, (params[0], params[1]), params[2], 0, 360, 255, -1)
             radius = max(params[0], params[1])
         
-        # Extract object
         x, y = center
         size = int(radius * 1.5)
         x1, y1 = max(0, x - size), max(0, y - size)
         x2, y2 = min(frame.shape[1], x + size), min(frame.shape[0], y + size)
         
         if x2 > x1 and y2 > y1:
-            cutout = frame[y1:y2, x1:x2]
+            cutout = cv2.bitwise_and(frame, frame, mask=mask)[y1:y2, x1:x2]
             cv2.imshow("Selected Object", cutout)
             cv2.imwrite(f"object_{time.time()}.png", cutout)
+            cv2.waitKey(0)
+            self.camera.release()
+            cv2.destroyAllWindows()
+            exit(0)
 
     def run(self):
-        """Main processing loop"""
+        """Main loop"""
         while self.running:
             try:
                 frame = self.frame_queue.get(timeout=0.5)
                 display_frame = self.process_frame(frame)
                 cv2.imshow("Camera Feed", display_frame)
-                
-                # Exit on 'q' key
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     self.running = False
                     break
