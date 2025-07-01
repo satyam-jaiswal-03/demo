@@ -1,334 +1,190 @@
-
-
-
-Absolutely! Here’s the final detailed solution considering:
-
-✅ Real-time webcam stream with getUserMedia.
-
-✅ Accessing frame timestamps using MediaStreamTrackProcessor.
-
-✅ Dropping frames in real-time if they match bad timestamps.
-
-✅ Example with dynamic timestamp logging and an interactive way to add “bad” timestamps for testing.
-
-⸻
-
-🎯 Final Solution (React + TypeScript) — Fully Functional Code
-
-🔥 Features:
-	•	Captures webcam stream.
-	•	Reads each frame’s timestamp (in microseconds).
-	•	Drops frames matching bad timestamps (with tolerance).
-	•	Logs timestamps to help you build a “bad timestamp” list.
-	•	Includes a button to dynamically add a bad timestamp for testing.
-	•	Renders the filtered frames onto a <canvas>.
-
-import React, { useEffect, useRef, useState } from 'react';
-
-const VideoFilterComponent: React.FC = () => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [badTimestamps, setBadTimestamps] = useState<number[]>([]);
-  const [lastFrameTimestamp, setLastFrameTimestamp] = useState<number | null>(null);
-
-  useEffect(() => {
-    let videoTrack: MediaStreamTrack;
-    let processor: MediaStreamTrackProcessor | null = null;
-    let reader: ReadableStreamDefaultReader<VideoFrame> | null = null;
-    let animationFrameId: number;
-
-    const start = async () => {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      videoTrack = stream.getVideoTracks()[0];
-
-      // @ts-ignore
-      processor = new MediaStreamTrackProcessor({ track: videoTrack });
-      // @ts-ignore
-      reader = processor.readable.getReader();
-
-      const ctx = canvasRef.current?.getContext('2d');
-      if (!ctx) return;
-
-      const processFrame = async () => {
-        const result = await reader!.read();
-        if (result.done) {
-          console.log('Stream ended');
-          return;
-        }
-
-        const frame = result.value;
-
-        const timestamp = frame.timestamp; // Microseconds
-        setLastFrameTimestamp(timestamp); // Update for UI
-
-        const tolerance = 2000; // 2ms tolerance
-        const isBad = badTimestamps.some(badTs => Math.abs(badTs - timestamp) < tolerance);
-
-        if (!isBad) {
-          // Draw frame on canvas
-          canvasRef.current.width = frame.displayWidth;
-          canvasRef.current.height = frame.displayHeight;
-          ctx.drawImage(frame, 0, 0);
-        } else {
-          console.log(`Dropped frame at timestamp: ${timestamp}`);
-        }
-
-        frame.close(); // Always release the frame
-
-        animationFrameId = requestAnimationFrame(processFrame);
-      };
-
-      processFrame();
-    };
-
-    start();
-
-    return () => {
-      if (reader) reader.cancel();
-      if (videoTrack) videoTrack.stop();
-      cancelAnimationFrame(animationFrameId);
-    };
-  }, [badTimestamps]);
-
-  // Function to add a current "bad timestamp" for testing
-  const addCurrentTimestampAsBad = () => {
-    if (lastFrameTimestamp) {
-      setBadTimestamps(prev => [...prev, lastFrameTimestamp]);
-      console.log(`Added bad timestamp: ${lastFrameTimestamp}`);
-    }
-  };
-
-  return (
-    <div>
-      <h3>Video Feed (Filtered)</h3>
-      <canvas ref={canvasRef} style={{ border: '1px solid black' }} />
-      <div style={{ marginTop: '10px' }}>
-        <button onClick={addCurrentTimestampAsBad}>Mark Current Timestamp as Bad</button>
-        <p>Last Frame Timestamp: {lastFrameTimestamp}</p>
-        <p>Bad Timestamps: {JSON.stringify(badTimestamps)}</p>
-      </div>
-    </div>
-  );
-};
-
-export default VideoFilterComponent;
-
-
-
-
-✅ frame.timestamp is in microseconds. We log it, store it in lastFrameTimestamp, and compare it against the badTimestamps list.
-
-✅ The tolerance (2ms = 2000µs) ensures near-matching frames get dropped, accounting for tiny timing variations.
-
-✅ The button lets you dynamically add a “bad” timestamp based on the last processed frame. Useful for testing!
-
-✅ The canvas displays only the frames that aren’t dropped.
-
-✅ badTimestamps can be dynamically updated (e.g., from an API, file, or button click).
-
-⸻
-
-🛠️ How to Use:
-
-1️⃣ Start the webcam stream when the page loads.
-
-2️⃣ Watch the console for Last Frame Timestamp. This helps you know current timestamps.
-
-3️⃣ Click “Mark Current Timestamp as Bad” to simulate dropping frames at specific times.
-
-4️⃣ The canvas updates in real time, dropping the selected frames.
-
-⸻
-import React, { useEffect, useRef, useState } from 'react';
-
-const VideoFilterComponent: React.FC = () => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [badTimestamps, setBadTimestamps] = useState<number[]>([]);
-  const [lastFrameTimestamp, setLastFrameTimestamp] = useState<number | null>(null);
-  const [isProcessorSupported, setIsProcessorSupported] = useState<boolean>(true);
-
-  useEffect(() => {
-    let videoTrack: MediaStreamTrack;
-    let processor: MediaStreamTrackProcessor | null = null;
-    let reader: ReadableStreamDefaultReader<VideoFrame> | null = null;
-    let animationFrameId: number;
-
-    const start = async () => {
-      if (typeof (window as any).MediaStreamTrackProcessor === 'undefined') {
-        console.error('MediaStreamTrackProcessor is not supported in this browser.');
-        setIsProcessorSupported(false);
-        return;
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      videoTrack = stream.getVideoTracks()[0];
-
-      // @ts-ignore
-      processor = new MediaStreamTrackProcessor({ track: videoTrack });
-      // @ts-ignore
-      reader = processor.readable.getReader();
-
-      const ctx = canvasRef.current?.getContext('2d');
-      if (!ctx) return;
-
-      const processFrame = async () => {
-        const result = await reader!.read();
-        if (result.done) {
-          console.log('Stream ended');
-          return;
-        }
-
-        const frame = result.value;
-
-        const timestamp = frame.timestamp;
-        setLastFrameTimestamp(timestamp);
-
-        const tolerance = 2000; // 2ms tolerance
-        const isBad = badTimestamps.some(badTs => Math.abs(badTs - timestamp) < tolerance);
-
-        if (!isBad) {
-          canvasRef.current.width = frame.displayWidth;
-          canvasRef.current.height = frame.displayHeight;
-          ctx.drawImage(frame, 0, 0);
-        } else {
-          console.log(`Dropped frame at timestamp: ${timestamp}`);
-        }
-
-        frame.close();
-
-        animationFrameId = requestAnimationFrame(processFrame);
-      };
-
-      processFrame();
-    };
-
-    start();
-
-    return () => {
-      if (reader) reader.cancel();
-      if (videoTrack) videoTrack.stop();
-      cancelAnimationFrame(animationFrameId);
-    };
-  }, [badTimestamps]);
-
-  const addCurrentTimestampAsBad = () => {
-    if (lastFrameTimestamp) {
-      setBadTimestamps(prev => [...prev, lastFrameTimestamp]);
-      console.log(`Added bad timestamp: ${lastFrameTimestamp}`);
-    }
-  };
-
-  return (
-    <div>
-      <h3>Video Feed (Filtered)</h3>
-      {!isProcessorSupported ? (
-        <p style={{ color: 'red' }}>Your browser does not support MediaStreamTrackProcessor. Please use Chrome 102+ or a compatible browser.</p>
-      ) : (
-        <>
-          <canvas ref={canvasRef} style={{ border: '1px solid black' }} />
-          <div style={{ marginTop: '10px' }}>
-            <button onClick={addCurrentTimestampAsBad}>Mark Current Timestamp as Bad</button>
-            <p>Last Frame Timestamp: {lastFrameTimestamp}</p>
-            <p>Bad Timestamps: {JSON.stringify(badTimestamps)}</p>
-          </div>
-        </>
-      )}
-    </div>
-  );
-};
-
-export default VideoFilterComponent;
-
-🚀 Next Steps:
-
-✅ If you want to load the badTimestamps from a file, API, or external data source, you can replace the setBadTimestamps logic accordingly.
-
-✅ If you’d like, I can also show how to record the filtered stream, or send it over a WebRTC connection.
-
-✅ Want to add frame rate control, resolution settings, or performance optimizations? Just let me know!
-
-⸻
-
-Let me know if you’d like me to add any extra features to this solution! 
-
-declare class MediaStreamTrackProcessor<T extends VideoFrame | AudioData = VideoFrame> {
-  readonly readable: ReadableStream<T>;
-  constructor(init: { track: MediaStreamTrack });
-}
-
-declare class MediaStreamTrackGenerator<T extends VideoFrame | AudioData = VideoFrame> extends MediaStreamTrack {
-  readonly writable: WritableStream<T>;
-  constructor(init: { kind: 'video' | 'audio' });
-}
-
-
-// Minimal WebCodecs type definitions
-
-interface VideoFrame {
-  readonly timestamp: number;
-  readonly duration: number | null;
-  readonly codedWidth: number;
-  readonly codedHeight: number;
-  readonly format: string;
-  close(): void;
-}
-
-interface AudioFrame {
-  readonly timestamp: number;
-  readonly duration: number | null;
-  readonly format: string;
-  readonly sampleRate: number;
-  readonly numberOfChannels: number;
-  readonly numberOfFrames: number;
-  close(): void;
-}
-
-declare var VideoFrame: {
-  prototype: VideoFrame;
-  new(init: VideoFrameInit): VideoFrame;
-};
-
-declare var AudioFrame: {
-  prototype: AudioFrame;
-  new(init: AudioFrameInit): AudioFrame;
-};
-
-// Optional: Add VideoFrameInit and AudioFrameInit if needed
-interface VideoFrameInit {
-  timestamp: number;
-  codedWidth: number;
-  codedHeight: number;
-  duration?: number;
-  format?: string;
-}
-
-interface AudioFrameInit {
-  timestamp: number;
-  sampleRate: number;
-  numberOfChannels: number;
-  numberOfFrames: number;
-  duration?: number;
-  format?: string;
-}
-
-import React from 'react';
-
-const AppRoutes: React.FC = () => {
-  const handleVideoFrame = (frame: VideoFrame) => {
-    console.log('Video Frame Timestamp:', frame.timestamp);
-    frame.close();
-  };
-
-  const handleAudioFrame = (frame: AudioFrame) => {
-    console.log('Audio Frame Sample Rate:', frame.sampleRate);
-    frame.close();
-  };
-
-  return (
-    <div>
-      <h1>App Routes</h1>
-      {/* Your routes/components */}
-    </div>
-  );
-};
-
-export default AppRoutes;
+import cv2
+import numpy as np
+import threading
+import queue
+import time
+
+class OptimizedDetector:
+    def __init__(self):
+        self.camera = cv2.VideoCapture(0)
+        if not self.camera.isOpened():
+            print("Error: Could not open camera")
+            return
+            
+        # Camera properties
+        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.camera.set(cv2.CAP_PROP_FPS, 30)
+        
+        # Detection parameters
+        self.min_radius = 10
+        self.max_radius = 100
+        self.circle_sensitivity = 30
+        
+        # Threading setup
+        self.frame_queue = queue.Queue(maxsize=2)
+        self.running = True
+        self.capture_thread = threading.Thread(target=self.capture_frames)
+        self.capture_thread.daemon = True
+        self.capture_thread.start()
+        
+        # Mouse callback
+        cv2.namedWindow("Camera Feed")
+        cv2.setMouseCallback("Camera Feed", self.select_object)
+        
+        # Selected object storage
+        self.selected_object = None
+        self.last_selection_time = 0
+
+    def capture_frames(self):
+        """Dedicated thread for fast frame capture"""
+        while self.running:
+            ret, frame = self.camera.read()
+            if ret:
+                # Resize for faster processing
+                frame = cv2.resize(frame, (640, 480))
+                
+                if self.frame_queue.full():
+                    try:
+                        self.frame_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                self.frame_queue.put(frame)
+            else:
+                time.sleep(0.01)
+
+    def detect_objects(self, frame):
+        """Optimized object detection"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Fast Gaussian blur for noise reduction
+        blurred = cv2.GaussianBlur(gray, (7, 7), 1.5)
+        
+        # Detect circles with optimized parameters
+        circles = cv2.HoughCircles(
+            blurred, 
+            cv2.HOUGH_GRADIENT, 
+            dp=1.2, 
+            minDist=30,
+            param1=50,
+            param2=self.circle_sensitivity,
+            minRadius=self.min_radius,
+            maxRadius=self.max_radius
+        )
+        
+        detected = []
+        
+        if circles is not None:
+            circles = np.uint16(np.around(circles))
+            for i in circles[0, :]:
+                detected.append(('circle', (i[0], i[1]), i[2]))
+        
+        # Fast contour detection for ellipses
+        edges = cv2.Canny(blurred, 30, 100)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        for contour in contours:
+            if len(contour) < 5:
+                continue
+                
+            # Convex hull for faster ellipse fitting
+            hull = cv2.convexHull(contour)
+            if len(hull) < 5:
+                continue
+                
+            try:
+                ellipse = cv2.fitEllipse(hull)
+                (center, axes, angle) = ellipse
+                major_axis = max(axes)
+                minor_axis = min(axes)
+                
+                # Fast size and ratio check
+                if 10 < minor_axis < 150 and 0.3 < minor_axis/major_axis < 1.0:
+                    detected.append(('ellipse', (int(center[0]), int(center[1])), 
+                                   (int(axes[0]/2), int(axes[1]/2), angle)))
+            except:
+                continue
+                
+        return detected
+
+    def select_object(self, event, x, y, flags, param):
+        """Handle object selection by mouse click"""
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.selected_object = (x, y)
+            self.last_selection_time = time.time()
+
+    def process_frame(self, frame):
+        """Process frame with detection and highlighting"""
+        # Detect objects if not processing too frequently
+        if time.time() - self.last_selection_time > 0.1:  # 10 FPS detection
+            detected = self.detect_objects(frame)
+        else:
+            detected = []
+        
+        # Highlight detected objects
+        display_frame = frame.copy()
+        for obj_type, center, params in detected:
+            color = (0, 0, 255)  # Red for detection
+            
+            # Highlight if near selection point
+            if self.selected_object:
+                dist = np.sqrt((center[0] - self.selected_object[0])**2 + 
+                              (center[1] - self.selected_object[1])**2)
+                if dist < (params[0] if obj_type == 'circle' else max(params[0], params[1])):
+                    color = (0, 255, 0)  # Green for selection
+                    self.store_object(frame, obj_type, center, params)
+            
+            # Draw the object
+            if obj_type == 'circle':
+                cv2.circle(display_frame, center, params, color, 2)
+            else:
+                cv2.ellipse(display_frame, center, (params[0], params[1]), 
+                           params[2], 0, 360, color, 2)
+        
+        return display_frame
+
+    def store_object(self, frame, obj_type, center, params):
+        """Store and display selected object"""
+        # Create mask
+        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        
+        if obj_type == 'circle':
+            cv2.circle(mask, center, params, 255, -1)
+            radius = params
+        else:
+            cv2.ellipse(mask, center, (params[0], params[1]), 
+                       params[2], 0, 360, 255, -1)
+            radius = max(params[0], params[1])
+        
+        # Extract object
+        x, y = center
+        size = int(radius * 1.5)
+        x1, y1 = max(0, x - size), max(0, y - size)
+        x2, y2 = min(frame.shape[1], x + size), min(frame.shape[0], y + size)
+        
+        if x2 > x1 and y2 > y1:
+            cutout = frame[y1:y2, x1:x2]
+            cv2.imshow("Selected Object", cutout)
+            cv2.imwrite(f"object_{time.time()}.png", cutout)
+
+    def run(self):
+        """Main processing loop"""
+        while self.running:
+            try:
+                frame = self.frame_queue.get(timeout=0.5)
+                display_frame = self.process_frame(frame)
+                cv2.imshow("Camera Feed", display_frame)
+                
+                # Exit on 'q' key
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    self.running = False
+                    break
+            except queue.Empty:
+                continue
+                
+        self.camera.release()
+        cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    detector = OptimizedDetector()
+    detector.run()
