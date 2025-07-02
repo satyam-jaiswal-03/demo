@@ -1,177 +1,145 @@
-import cv2
-import numpy as np
-import threading
-import queue
-import time
+import React, { useEffect, useRef, useState } from 'react';
 
-class OptimizedDetector:
-    def __init__(self):
-        self.camera = cv2.VideoCapture(0)
-        if not self.camera.isOpened():
-            print("Error: Could not open camera")
-            exit(1)
-        
-        # Camera properties
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        self.camera.set(cv2.CAP_PROP_FPS, 30)
-        
-        # Detection parameters
-        self.min_radius = 10
-        self.max_radius = 100
-        self.circle_sensitivity = 30
-        
-        # Threading setup
-        self.frame_queue = queue.Queue(maxsize=2)
-        self.running = True
-        self.capture_thread = threading.Thread(target=self.capture_frames)
-        self.capture_thread.daemon = True
-        self.capture_thread.start()
-        
-        # Mouse callback
-        cv2.namedWindow("Camera Feed")
-        cv2.setMouseCallback("Camera Feed", self.select_object)
-        
-        # Selected object storage
-        self.selected_object = None
+declare const cv: any; // OpenCV.js from global script
 
-    def capture_frames(self):
-        """Dedicated thread for fast frame capture"""
-        while self.running:
-            ret, frame = self.camera.read()
-            if ret:
-                frame = cv2.resize(frame, (640, 480))
-                
-                if self.frame_queue.full():
-                    try:
-                        self.frame_queue.get_nowait()
-                    except queue.Empty:
-                        pass
-                self.frame_queue.put(frame)
-            else:
-                time.sleep(0.01)
+interface DetectedShape {
+  x: number;
+  y: number;
+  radius: number;
+}
 
-    def detect_objects(self, frame):
-        """Detect circles and ellipses"""
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (7, 7), 1.5)
-        
-        # Circles
-        circles = cv2.HoughCircles(
-            blurred, 
-            cv2.HOUGH_GRADIENT, 
-            dp=1.2, 
-            minDist=30,
-            param1=50,
-            param2=self.circle_sensitivity,
-            minRadius=self.min_radius,
-            maxRadius=self.max_radius
-        )
-        
-        detected = []
-        
-        if circles is not None:
-            circles = np.uint16(np.around(circles))
-            for i in circles[0, :]:
-                detected.append(('circle', (i[0], i[1]), i[2]))
-        
-        # Ellipses
-        edges = cv2.Canny(blurred, 30, 100)
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        for contour in contours:
-            if len(contour) < 5:
-                continue
-            hull = cv2.convexHull(contour)
-            if len(hull) < 5:
-                continue
-            try:
-                ellipse = cv2.fitEllipse(hull)
-                (center, axes, angle) = ellipse
-                major_axis = max(axes)
-                minor_axis = min(axes)
-                if 10 < minor_axis < 150 and 0.3 < minor_axis/major_axis < 1.0:
-                    detected.append(('ellipse', (int(center[0]), int(center[1])), 
-                                   (int(axes[0]/2), int(axes[1]/2), angle)))
-            except:
-                continue
-                
-        return detected
+const ShapeDetector: React.FC = () => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-    def select_object(self, event, x, y, flags, param):
-        """Handle object selection by mouse click"""
-        if event == cv2.EVENT_LBUTTONDOWN:
-            self.selected_object = (x, y)
+  const [cvReady, setCvReady] = useState(false);
+  const [detectedShapes, setDetectedShapes] = useState<DetectedShape[]>([]);
+  const [selectedBase64, setSelectedBase64] = useState<string | null>(null);
 
-    def process_frame(self, frame):
-        """Detect, highlight, and handle selection"""
-        detected = self.detect_objects(frame)
-        display_frame = frame.copy()
-        overlay = np.zeros_like(display_frame, dtype=np.uint8)
-        
-        for obj_type, center, params in detected:
-            mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-            
-            if obj_type == 'circle':
-                cv2.circle(mask, center, params, 255, -1)
-            else:
-                cv2.ellipse(mask, center, (params[0], params[1]), params[2], 0, 360, 255, -1)
-            
-            blue_overlay = np.zeros_like(display_frame, dtype=np.uint8)
-            blue_overlay[:] = (255, 0, 0)  # Blue color
-            
-            overlay = cv2.add(overlay, cv2.bitwise_and(blue_overlay, blue_overlay, mask=mask))
-            
-            if self.selected_object:
-                dist = np.linalg.norm(np.array(center) - np.array(self.selected_object))
-                if dist < (params if obj_type == 'circle' else max(params[0], params[1])):
-                    self.store_object(frame, obj_type, center, params)
-                    self.running = False
-                    break
-        
-        combined = cv2.addWeighted(display_frame, 1.0, overlay, 0.3, 0)
-        return combined
+  useEffect(() => {
+    if (window.cv) {
+      if (cv.getBuildInformation) {
+        setCvReady(true);
+      } else {
+        cv['onRuntimeInitialized'] = () => {
+          setCvReady(true);
+        };
+      }
+    } else {
+      console.error('OpenCV.js not loaded. Make sure <script src="https://docs.opencv.org/4.x/opencv.js"></script> is in your index.html.');
+    }
+  }, []);
 
-    def store_object(self, frame, obj_type, center, params):
-        """Store, display, and exit"""
-        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-        if obj_type == 'circle':
-            cv2.circle(mask, center, params, 255, -1)
-            radius = params
-        else:
-            cv2.ellipse(mask, center, (params[0], params[1]), params[2], 0, 360, 255, -1)
-            radius = max(params[0], params[1])
-        
-        x, y = center
-        size = int(radius * 1.5)
-        x1, y1 = max(0, x - size), max(0, y - size)
-        x2, y2 = min(frame.shape[1], x + size), min(frame.shape[0], y + size)
-        
-        if x2 > x1 and y2 > y1:
-            cutout = cv2.bitwise_and(frame, frame, mask=mask)[y1:y2, x1:x2]
-            cv2.imshow("Selected Object", cutout)
-            cv2.imwrite(f"object_{time.time()}.png", cutout)
-            cv2.waitKey(0)
-            self.camera.release()
-            cv2.destroyAllWindows()
-            exit(0)
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-    def run(self):
-        """Main loop"""
-        while self.running:
-            try:
-                frame = self.frame_queue.get(timeout=0.5)
-                display_frame = self.process_frame(frame)
-                cv2.imshow("Camera Feed", display_frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    self.running = False
-                    break
-            except queue.Empty:
-                continue
-                
-        self.camera.release()
-        cv2.destroyAllWindows()
+    const img = new Image();
+    img.onload = () => {
+      const canvas = canvasRef.current!;
+      const ctx = canvas.getContext('2d')!;
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+      processImageWithOpenCV(canvas);
+    };
+    img.src = URL.createObjectURL(file);
+  };
 
-if __name__ == "__main__":
-    detector = OptimizedDetector()
-    detector.run()
+  const processImageWithOpenCV = (canvas: HTMLCanvasElement) => {
+    const src = cv.imread(canvas);
+    const gray = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+    cv.GaussianBlur(gray, gray, new cv.Size(9, 9), 2, 2);
+
+    const circles = new cv.Mat();
+    cv.HoughCircles(
+      gray, circles, cv.HOUGH_GRADIENT, 1,
+      gray.rows/8, 100, 30, 0, 0
+    );
+
+    const ctx = canvas.getContext('2d')!;
+    ctx.strokeStyle = 'red';
+    ctx.lineWidth = 3;
+
+    const detected: DetectedShape[] = [];
+    for (let i = 0; i < circles.cols; i++) {
+      const [x, y, radius] = circles.data32F.slice(i * 3, i * 3 + 3);
+      ctx.beginPath();
+      ctx.ellipse(x, y, radius, radius, 0, 0, 2 * Math.PI);
+      ctx.stroke();
+      detected.push({ x, y, radius });
+    }
+    setDetectedShapes(detected);
+
+    src.delete();
+    gray.delete();
+    circles.delete();
+  };
+
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const clicked = detectedShapes.find(
+      s => Math.hypot(s.x - x, s.y - y) <= s.radius
+    );
+
+    if (clicked) {
+      const canvas = canvasRef.current!;
+      const ctx = canvas.getContext('2d')!;
+      const cutSize = clicked.radius * 2;
+      const cutX = clicked.x - clicked.radius;
+      const cutY = clicked.y - clicked.radius;
+      const imageData = ctx.getImageData(cutX, cutY, cutSize, cutSize);
+
+      const offCanvas = document.createElement('canvas');
+      offCanvas.width = cutSize;
+      offCanvas.height = cutSize;
+      const offCtx = offCanvas.getContext('2d')!;
+      offCtx.putImageData(imageData, 0, 0);
+
+      const base64 = offCanvas.toDataURL();
+      setSelectedBase64(base64);
+    }
+  };
+
+  return (
+    <div style={{ textAlign: 'center' }}>
+      {!cvReady && <p>Loading OpenCV.js... please wait.</p>}
+      {cvReady && (
+        <>
+          <input
+            type="file"
+            accept="image/*"
+            ref={fileInputRef}
+            onChange={handleImageUpload}
+          />
+          <br /><br />
+          <canvas
+            ref={canvasRef}
+            onClick={handleCanvasClick}
+            style={{ border: '1px solid black', maxWidth: '100%' }}
+          />
+          <br />
+          {selectedBase64 && (
+            <div>
+              <h3>Selected Shape Cutout</h3>
+              <img src={selectedBase64} alt="Selected Cutout" />
+              <br />
+              <button onClick={() => {
+                const a = document.createElement('a');
+                a.href = selectedBase64;
+                a.download = 'selected_shape.png';
+                a.click();
+              }}>Download Cutout</button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
+export default ShapeDetector;
