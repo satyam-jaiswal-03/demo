@@ -1,91 +1,118 @@
 import cv2
+import numpy as np
 import time
 from ultralytics import YOLO
-from deep_sort_realtime.deepsort_tracker import DeepSort
 
-# Initialize YOLOv10
-model = YOLO("yolov10s.pt")  # Replace with your best yolov10 model
-model.fuse()
-
-# Initialize DeepSORT
-tracker = DeepSort(max_age=30)
+# Load YOLOv8 model (make sure you have downloaded the weights)
+model = YOLO('yolov8n.pt')  # lightweight model; yolov8s/yolov8m give better accuracy but lower fps
 
 # Open webcam
 cap = cv2.VideoCapture(0)
 if not cap.isOpened():
-    print("Failed to open camera")
-    exit(1)
+    print("Could not open webcam")
+    exit()
 
+# Set camera buffer size to minimize latency
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+# Selected object info
+selected_box = None
 selected_id = None
 
+# Mouse callback for selection
 def click_event(event, x, y, flags, param):
-    global selected_id
+    global selected_box, selected_id
     if event == cv2.EVENT_LBUTTONDOWN:
-        # User clicked → check which tracked object was clicked
-        for track_id, track in param.items():
-            l, t, w, h = track[0]
-            if l < x < l + w and t < y < t + h:
-                selected_id = track_id
-                print(f"[Selected object ID]: {selected_id}")
+        for idx, box in enumerate(param):
+            x1, y1, x2, y2, cls, conf = box
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                selected_box = box
+                selected_id = idx
+                print(f"Selected object at ({x}, {y}) with box {box}")
+                break
 
-cv2.namedWindow("Object Tracking")
-cv2.setMouseCallback("Object Tracking", click_event, {})
+cv2.namedWindow("Object Detection")
+cv2.setMouseCallback("Object Detection", click_event, param=[])
+
+prev_time = time.time()
 
 while True:
-    start_time = time.time()
     ret, frame = cap.read()
     if not ret:
+        print("Failed to grab frame")
         break
 
-    results = model(frame, verbose=False)[0]
+    start_time = time.time()
 
-    detections = []
-    for box in results.boxes:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-        conf = box.conf[0].item()
-        cls = int(box.cls[0].item())
-        detections.append(([x1, y1, x2 - x1, y2 - y1], conf, cls))
+    # Resize input frame to speed up detection (comment out if you prefer full res)
+    input_frame = cv2.resize(frame, (640, 480))
 
-    tracks = tracker.update_tracks(detections, frame=frame)
-    tracked_objects = {}  # for updating mouse callback
+    # Run object detection
+    results = model(input_frame, verbose=False)[0]
+    boxes = []
 
-    found_selected = False  # flag if selected object is in frame
+    for r in results.boxes:
+        x1, y1, x2, y2 = r.xyxy[0].cpu().numpy()
+        cls = int(r.cls[0])
+        conf = float(r.conf[0])
+        # scale boxes back to original frame size if you resized:
+        scale_x = frame.shape[1] / input_frame.shape[1]
+        scale_y = frame.shape[0] / input_frame.shape[0]
+        x1, y1, x2, y2 = int(x1 * scale_x), int(y1 * scale_y), int(x2 * scale_x), int(y2 * scale_y)
+        boxes.append([x1, y1, x2, y2, cls, conf])
 
-    for track in tracks:
-        if not track.is_confirmed():
-            continue
-        track_id = track.track_id
-        l, t, w, h = map(int, track.to_ltrb())
-        tracked_objects[track_id] = [(l, t, w, h)]
+    # Update mouse callback param with current boxes ONCE instead of every frame
+    cv2.setMouseCallback("Object Detection", click_event, param=boxes)
 
-        if selected_id is None:
-            # PHASE 1: draw boxes around all detected objects
-            cv2.rectangle(frame, (l, t), (l + w, t + h), (255, 0, 0), 2)
-            cv2.putText(frame, f"ID:{track_id}", (l, t - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+    # Draw boxes
+    if selected_box is None:
+        for box in boxes:
+            x1, y1, x2, y2, cls, conf = box
+            label = f"{model.names[cls]} {conf:.2f}"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    else:
+        # Draw only selected box
+        x1, y1, x2, y2, cls, conf = selected_box
 
-        elif track_id == selected_id:
-            # PHASE 2: draw box only around selected object
-            found_selected = True
-            cv2.rectangle(frame, (l, t), (l + w, t + h), (0, 255, 0), 2)
-            cv2.putText(frame, f"ID:{track_id}", (l, t - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        # Update selected box by matching class and closest center in current frame
+        min_dist = float("inf")
+        updated_box = selected_box
+        sel_cx, sel_cy = (x1 + x2) // 2, (y1 + y2) // 2
 
-    if selected_id is not None and not found_selected:
-        # if selected object is currently not in frame → don't draw anything
-        pass
+        for box in boxes:
+            bx1, by1, bx2, by2, bcls, bconf = box
+            if bcls != cls:
+                continue
+            bx_cx, bx_cy = (bx1 + bx2) // 2, (by1 + by2) // 2
+            dist = np.hypot(bx_cx - sel_cx, bx_cy - sel_cy)
+            if dist < min_dist:
+                min_dist = dist
+                updated_box = box
 
-    cv2.setMouseCallback("Object Tracking", click_event, tracked_objects)
+        selected_box = updated_box
+        x1, y1, x2, y2, cls, conf = selected_box
+        label = f"{model.names[cls]} {conf:.2f} [TRACKING]"
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+        cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-    # FPS calculation
-    end_time = time.time()
-    fps = 1.0 / (end_time - start_time + 1e-6)
-    cv2.putText(frame, f"FPS: {fps:.2f}", (20, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+    # Calculate FPS
+    current_time = time.time()
+    fps = 1 / (current_time - prev_time)
+    prev_time = current_time
 
-    cv2.imshow("Object Tracking", frame)
-    if cv2.waitKey(1) & 0xFF == 27:  # ESC to exit
+    # Display FPS on frame
+    cv2.putText(frame, f"FPS: {fps:.1f}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+
+    cv2.imshow("Object Detection", frame)
+
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):
         break
+    elif key == ord('r'):
+        print("Reset selection")
+        selected_box = None
+        selected_id = None
 
 cap.release()
 cv2.destroyAllWindows()
