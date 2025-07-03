@@ -1,9 +1,13 @@
 import cv2
 import numpy as np
 from ultralytics import YOLO
+from deep_sort_realtime.deepsort_tracker import DeepSort
 
-# Load YOLOv8 model (make sure you have downloaded the weights)
-model = YOLO('yolov8n.pt')  # lightweight model; you can use yolov8s.pt/yolov8m.pt for higher accuracy
+# Load YOLOv8 model (best accuracy -> yolov8m.pt or yolov8l.pt; or yolov8x.pt if you have GPU power)
+model = YOLO('yolov8m.pt')  
+
+# Initialize DeepSORT
+tracker = DeepSort(max_age=30)  # Tracks disappear if lost >30 frames
 
 # Open webcam
 cap = cv2.VideoCapture(0)
@@ -11,21 +15,18 @@ if not cap.isOpened():
     print("Could not open webcam")
     exit()
 
-# Selected object info
-selected_box = None
 selected_id = None
 
-# Mouse callback for selection
 def click_event(event, x, y, flags, param):
-    global selected_box, selected_id
+    global selected_id
     if event == cv2.EVENT_LBUTTONDOWN:
-        # Check if click is inside any box
-        for idx, box in enumerate(param):
-            x1, y1, x2, y2, cls, conf = box
+        for track in param:
+            track_id, tlwh, cls = track
+            x1, y1, w, h = tlwh
+            x2, y2 = x1 + w, y1 + h
             if x1 <= x <= x2 and y1 <= y <= y2:
-                selected_box = box
-                selected_id = idx
-                print(f"Selected object at ({x}, {y}) with box {box}")
+                selected_id = track_id
+                print(f"Selected object with track ID: {selected_id}")
                 break
 
 cv2.namedWindow("Object Detection")
@@ -34,54 +35,44 @@ cv2.setMouseCallback("Object Detection", click_event, param=[])
 while True:
     ret, frame = cap.read()
     if not ret:
-        print("Failed to grab frame")
         break
 
-    # Run object detection
     results = model(frame)[0]
-    boxes = []
 
+    detections = []
     for r in results.boxes:
-        x1, y1, x2, y2 = r.xyxy[0].cpu().numpy().astype(int)
+        x1, y1, x2, y2 = r.xyxy[0].cpu().numpy()
         cls = int(r.cls[0])
         conf = float(r.conf[0])
-        boxes.append([x1, y1, x2, y2, cls, conf])
+        detections.append(([x1, y1, x2 - x1, y2 - y1], conf, cls))
 
-    # Update mouse callback param with current boxes
-    cv2.setMouseCallback("Object Detection", click_event, param=boxes)
+    tracks = tracker.update_tracks(detections, frame=frame)
 
-    # Draw boxes
-    if selected_box is None:
-        # No selection: draw all detected boxes
-        for box in boxes:
-            x1, y1, x2, y2, cls, conf = box
-            label = f"{model.names[cls]} {conf:.2f}"
+    mouse_tracks = []
+
+    for track in tracks:
+        if not track.is_confirmed():
+            continue
+        track_id = track.track_id
+        ltrb = track.to_ltrb()
+        x1, y1, x2, y2 = map(int, ltrb)
+        cls = track.det_class
+
+        if selected_id is None:
+            # draw all tracks
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-    else:
-        # Draw only selected box
-        x1, y1, x2, y2, cls, conf = selected_box
+            cv2.putText(frame, f"ID {track_id}", (x1, y1-5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+        elif selected_id == track_id:
+            # draw only selected track
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            cv2.putText(frame, f"TRACKING ID {track_id}", (x1, y1-5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
 
-        # Update selected box by matching class and closest center in current frame
-        min_dist = float("inf")
-        updated_box = selected_box
-        sel_cx, sel_cy = (x1 + x2) // 2, (y1 + y2) // 2
+        mouse_tracks.append((track_id, track.to_tlwh(), cls))
 
-        for box in boxes:
-            bx1, by1, bx2, by2, bcls, bconf = box
-            if bcls != cls:
-                continue
-            bx_cx, bx_cy = (bx1 + bx2) // 2, (by1 + by2) // 2
-            dist = np.hypot(bx_cx - sel_cx, bx_cy - sel_cy)
-            if dist < min_dist:
-                min_dist = dist
-                updated_box = box
-
-        selected_box = updated_box
-        x1, y1, x2, y2, cls, conf = selected_box
-        label = f"{model.names[cls]} {conf:.2f} [TRACKING]"
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
-        cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+    # update mouse callback param with current tracks
+    cv2.setMouseCallback("Object Detection", click_event, param=mouse_tracks)
 
     cv2.imshow("Object Detection", frame)
 
@@ -90,7 +81,6 @@ while True:
         break
     elif key == ord('r'):
         print("Reset selection")
-        selected_box = None
         selected_id = None
 
 cap.release()
