@@ -1,0 +1,97 @@
+import cv2
+import numpy as np
+from ultralytics import YOLO
+
+# Load YOLOv8 model (make sure you have downloaded the weights)
+model = YOLO('yolov8n.pt')  # lightweight model; you can use yolov8s.pt/yolov8m.pt for higher accuracy
+
+# Open webcam
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("Could not open webcam")
+    exit()
+
+# Selected object info
+selected_box = None
+selected_id = None
+
+# Mouse callback for selection
+def click_event(event, x, y, flags, param):
+    global selected_box, selected_id
+    if event == cv2.EVENT_LBUTTONDOWN:
+        # Check if click is inside any box
+        for idx, box in enumerate(param):
+            x1, y1, x2, y2, cls, conf = box
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                selected_box = box
+                selected_id = idx
+                print(f"Selected object at ({x}, {y}) with box {box}")
+                break
+
+cv2.namedWindow("Object Detection")
+cv2.setMouseCallback("Object Detection", click_event, param=[])
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("Failed to grab frame")
+        break
+
+    # Run object detection
+    results = model(frame)[0]
+    boxes = []
+
+    for r in results.boxes:
+        x1, y1, x2, y2 = r.xyxy[0].cpu().numpy().astype(int)
+        cls = int(r.cls[0])
+        conf = float(r.conf[0])
+        boxes.append([x1, y1, x2, y2, cls, conf])
+
+    # Update mouse callback param with current boxes
+    cv2.setMouseCallback("Object Detection", click_event, param=boxes)
+
+    # Draw boxes
+    if selected_box is None:
+        # No selection: draw all detected boxes
+        for box in boxes:
+            x1, y1, x2, y2, cls, conf = box
+            label = f"{model.names[cls]} {conf:.2f}"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    else:
+        # Draw only selected box
+        x1, y1, x2, y2, cls, conf = selected_box
+
+        # Update selected box by matching class and closest center in current frame
+        min_dist = float("inf")
+        updated_box = selected_box
+        sel_cx, sel_cy = (x1 + x2) // 2, (y1 + y2) // 2
+
+        for box in boxes:
+            bx1, by1, bx2, by2, bcls, bconf = box
+            if bcls != cls:
+                continue
+            bx_cx, bx_cy = (bx1 + bx2) // 2, (by1 + by2) // 2
+            dist = np.hypot(bx_cx - sel_cx, bx_cy - sel_cy)
+            if dist < min_dist:
+                min_dist = dist
+                updated_box = box
+
+        selected_box = updated_box
+        x1, y1, x2, y2, cls, conf = selected_box
+        label = f"{model.names[cls]} {conf:.2f} [TRACKING]"
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+        cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+    cv2.imshow("Object Detection", frame)
+
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):
+        break
+    elif key == ord('r'):
+        print("Reset selection")
+        selected_box = None
+        selected_id = None
+
+cap.release()
+cv2.destroyAllWindows()
