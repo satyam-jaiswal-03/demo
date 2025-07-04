@@ -1,0 +1,91 @@
+import cv2
+import numpy as np
+from ultralytics import YOLO
+from deep_sort_realtime.deepsort_tracker import DeepSort
+
+# Load YOLOv8 model
+model = YOLO("yolov8n.pt")
+
+# Initialize DeepSORT
+tracker = DeepSort(max_age=30)
+
+# Open webcam
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("Could not open webcam")
+    exit()
+
+selected_id = None  # selected object's unique DeepSORT ID
+
+# Mouse callback to select object by clicking
+def click_event(event, x, y, flags, param):
+    global selected_id
+    if event == cv2.EVENT_LBUTTONDOWN:
+        tracks = param
+        for trk in tracks:
+            x1, y1, x2, y2, track_id = trk
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                selected_id = track_id
+                print(f"Selected object with DeepSORT ID: {selected_id}")
+                break
+
+cv2.namedWindow("Tracking")
+cv2.setMouseCallback("Tracking", click_event, param=[])
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # Run YOLO detection
+    results = model(frame, verbose=False)[0]
+    detections = []
+
+    for box in results.boxes:
+        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+        conf = box.conf[0]
+        cls = int(box.cls[0])
+        if conf < 0.3:
+            continue
+        detections.append(([x1, y1, x2 - x1, y2 - y1], conf, cls))
+
+    # Update DeepSORT tracker with detections
+    tracks = tracker.update_tracks(detections, frame=frame)
+
+    # Prepare tracks for click callback
+    current_tracks = []
+    for track in tracks:
+        if not track.is_confirmed():
+            continue
+        track_id = track.track_id
+        ltrb = track.to_ltrb()
+        x1, y1, x2, y2 = map(int, ltrb)
+        current_tracks.append((x1, y1, x2, y2, track_id))
+
+    # Update mouse callback param with current tracks
+    cv2.setMouseCallback("Tracking", click_event, param=current_tracks)
+
+    # Draw boxes
+    for x1, y1, x2, y2, track_id in current_tracks:
+        if selected_id is None:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, f"ID {track_id}", (x1, y1 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        else:
+            if track_id == selected_id:
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                cv2.putText(frame, f"ID {track_id} [TRACKING]", (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+    # If selected object is not present: no box will be drawn
+
+    cv2.imshow("Tracking", frame)
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):
+        break
+    elif key == ord('r'):
+        print("Selection reset.")
+        selected_id = None
+
+cap.release()
+cv2.destroyAllWindows()
