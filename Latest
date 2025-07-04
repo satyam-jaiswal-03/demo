@@ -1,1 +1,85 @@
+import cv2
+import numpy as np
+import time
 
+cap = cv2.VideoCapture(0)  # or your video source
+selected_id = None
+id_counter = 0
+
+def click_event(event, x, y, flags, param):
+    global selected_id
+    tracks = param
+    for trk in tracks:
+        x1, y1, x2, y2, track_id = trk
+        if x1 <= x <= x2 and y1 <= y <= y2:
+            selected_id = track_id
+            print(f"Selected ID: {selected_id}")
+            break
+
+cv2.namedWindow("Tracking")
+cv2.setMouseCallback("Tracking", click_event, param=[])
+
+prev_time = time.time()
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 2)
+
+    current_tracks = []
+
+    # ---- Detect Circles ----
+    circles = cv2.HoughCircles(
+        blurred, cv2.HOUGH_GRADIENT, dp=1.2, minDist=30,
+        param1=50, param2=30, minRadius=10, maxRadius=300
+    )
+    if circles is not None:
+        circles = np.round(circles[0, :]).astype("int")
+        for (x, y, r) in circles:
+            x1, y1, x2, y2 = x - r, y - r, x + r, y + r
+            id_counter += 1
+            current_tracks.append((x1, y1, x2, y2, id_counter))
+
+    # ---- Detect Ellipses ----
+    contours, _ = cv2.findContours(blurred, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in contours:
+        if len(cnt) >= 5:
+            ellipse = cv2.fitEllipse(cnt)
+            (xc, yc), (major, minor), angle = ellipse
+            if 10 < major < 300 and 0.8 < (minor / major) < 1.0:  # ratio close to circle or ellipse
+                x1, y1 = int(xc - major / 2), int(yc - minor / 2)
+                x2, y2 = int(xc + major / 2), int(yc + minor / 2)
+                id_counter += 1
+                current_tracks.append((x1, y1, x2, y2, id_counter))
+
+    selected_found = False
+    for x1, y1, x2, y2, track_id in current_tracks:
+        if selected_id is not None and track_id == selected_id:
+            selected_found = True
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            cv2.putText(frame, f"ID {track_id}", (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+    cv2.setMouseCallback("Tracking", click_event, param=current_tracks)
+
+    if selected_id is None:
+        for x1, y1, x2, y2, track_id in current_tracks:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, f"ID {track_id}", (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+    current_time = time.time()
+    fps = 1 / (current_time - prev_time)
+    prev_time = current_time
+    cv2.putText(frame, f"FPS: {fps:.1f}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+
+    cv2.imshow("Tracking", frame)
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):
+        break
+    elif key == ord('r'):
+        selected_id = None
+
+cap.release()
+cv2.destroyAllWindows()
