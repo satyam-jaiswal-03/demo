@@ -14,7 +14,6 @@ if not cap.isOpened():
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 selected_id = None
-
 tracker = Sort()
 
 cv2.namedWindow("Object Detection")
@@ -85,16 +84,24 @@ while True:
 
     cv2.setMouseCallback("Object Detection", click_event, param=boxes_param)
 
-    for box in boxes_param:
-        x1, y1, x2, y2, track_id, cls, conf = box
-        if selected_id is None:
+    if selected_id is None:
+        for box in boxes_param:
+            x1, y1, x2, y2, track_id, cls, conf = box
             label = f"ID:{track_id} {model.names[cls]} {conf:.2f}"
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        elif track_id == selected_id:
-            label = f"ID:{track_id} {model.names[cls]} {conf:.2f} [TRACKING]"
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
-            cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+    else:
+        found = False
+        for box in boxes_param:
+            x1, y1, x2, y2, track_id, cls, conf = box
+            if track_id == selected_id:
+                found = True
+                label = f"ID:{track_id} {model.names[cls]} {conf:.2f} [TRACKING]"
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                break
+        if not found:
+            pass  # object is currently out of frame → show nothing
 
     current_time = time.time()
     fps = 1 / (current_time - prev_time)
