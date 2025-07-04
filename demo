@@ -1,10 +1,14 @@
 import cv2
+import torch
 import numpy as np
 import time
 from ultralytics import YOLO
-from sort import Sort
+from deep_sort.deep_sort import DeepSort
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model = YOLO('yolov8n.pt')
+
+deepsort = DeepSort("deep_sort/deep_sort/deep/checkpoint/ckpt.t7", use_cuda=torch.cuda.is_available())
 
 cap = cv2.VideoCapture(0)
 if not cap.isOpened():
@@ -14,9 +18,6 @@ if not cap.isOpened():
 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 selected_id = None
-tracker = Sort()
-
-cv2.namedWindow("Object Detection")
 boxes_param = []
 
 def click_event(event, x, y, flags, param):
@@ -29,6 +30,7 @@ def click_event(event, x, y, flags, param):
                 print(f"Selected object ID {track_id} at ({x}, {y})")
                 break
 
+cv2.namedWindow("Object Detection")
 cv2.setMouseCallback("Object Detection", click_event, param=[])
 
 prev_time = time.time()
@@ -40,6 +42,7 @@ while True:
         break
 
     input_frame = cv2.resize(frame, (640, 480))
+
     results = model(input_frame, verbose=False)[0]
     detections = []
 
@@ -48,27 +51,26 @@ while True:
 
     for r in results.boxes:
         x1, y1, x2, y2 = r.xyxy[0].cpu().numpy()
-        cls = int(r.cls[0])
         conf = float(r.conf[0])
+        cls = int(r.cls[0])
         x1, y1, x2, y2 = x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y
-        detections.append([x1, y1, x2, y2, conf])
+        w, h = x2 - x1, y2 - y1
+        detections.append([x1, y1, w, h, conf])
 
-    detections = np.array(detections)
-    if detections.shape[0] == 0:
-        trackers = np.empty((0, 5))
+    if len(detections) > 0:
+        dets = np.array(detections)
+        outputs = deepsort.update(dets, frame)
     else:
-        trackers = tracker.update(detections)
+        deepsort.increment_ages()
+        outputs = []
 
     boxes_param = []
-    for d in trackers:
-        x1, y1, x2, y2, track_id = d
-        best_iou = 0
-        best_cls = None
-        best_conf = None
+    for output in outputs:
+        x1, y1, x2, y2, track_id = output
+        best_iou, best_cls, best_conf = 0, None, None
         for r in results.boxes:
             rx1, ry1, rx2, ry2 = r.xyxy[0].cpu().numpy()
-            rcls = int(r.cls[0])
-            rconf = float(r.conf[0])
+            rcls, rconf = int(r.cls[0]), float(r.conf[0])
             rx1, ry1, rx2, ry2 = rx1 * scale_x, ry1 * scale_y, rx2 * scale_x, ry2 * scale_y
             inter_x1, inter_y1 = max(x1, rx1), max(y1, ry1)
             inter_x2, inter_y2 = min(x2, rx2), min(y2, ry2)
@@ -76,9 +78,7 @@ while True:
             box_area = (rx2 - rx1) * (ry2 - ry1)
             iou = inter_area / box_area if box_area > 0 else 0
             if iou > best_iou:
-                best_iou = iou
-                best_cls = rcls
-                best_conf = rconf
+                best_iou, best_cls, best_conf = iou, rcls, rconf
         if best_iou > 0.3:
             boxes_param.append([int(x1), int(y1), int(x2), int(y2), int(track_id), best_cls, best_conf])
 
@@ -101,7 +101,7 @@ while True:
                 cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 break
         if not found:
-            pass  # object is currently out of frame → show nothing
+            pass  # object is out of frame → no box
 
     current_time = time.time()
     fps = 1 / (current_time - prev_time)
