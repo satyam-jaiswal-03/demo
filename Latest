@@ -26,25 +26,34 @@ def click_event(event, x, y, flags, param):
 
 cv2.setMouseCallback("Tracking", click_event, param=[])
 
+frame_count = 0
 prev_time = time.time()
+last_detections = []
 
 while True:
     ret, frame = cap.read()
     if not ret:
         break
 
-    start_time = time.time()
-    results = model(frame, verbose=False, imgsz=640)[0]
-    detections = []
-    for box in results.boxes:
-        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-        conf = box.conf[0]
-        cls = int(box.cls[0])
-        if conf < 0.3:
-            continue
-        detections.append(([x1, y1, x2 - x1, y2 - y1], conf, cls))
+    frame_small = cv2.resize(frame, (416, 320))
+    frame_count += 1
 
-    tracks = tracker.update_tracks(detections, frame=frame)
+    if frame_count % 3 == 0:
+        results = model(frame_small, verbose=False, imgsz=320)[0]
+        detections = []
+        for box in results.boxes:
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+            conf = box.conf[0]
+            cls = int(box.cls[0])
+            if conf < 0.3:
+                continue
+            scale_x = frame.shape[1] / frame_small.shape[1]
+            scale_y = frame.shape[0] / frame_small.shape[0]
+            x1, y1, x2, y2 = x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y
+            detections.append(([x1, y1, x2 - x1, y2 - y1], conf, cls))
+        last_detections = detections
+
+    tracks = tracker.update_tracks(last_detections, frame=frame)
     current_tracks = []
     for track in tracks:
         if not track.is_confirmed() or track.time_since_update > 1:
@@ -66,8 +75,6 @@ while True:
         for x1, y1, x2, y2, track_id in current_tracks:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, f"ID {track_id}", (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-    if selected_id is not None and not found_selected:
-        pass
 
     current_time = time.time()
     fps = 1 / (current_time - prev_time)
