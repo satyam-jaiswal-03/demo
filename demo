@@ -54,21 +54,34 @@ while True:
         x1, y1, x2, y2 = x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y
         detections.append([x1, y1, x2, y2, conf])
 
-    trackers = tracker.update(np.array(detections))
+    detections = np.array(detections)
+    if detections.shape[0] == 0:
+        trackers = np.empty((0, 5))
+    else:
+        trackers = tracker.update(detections)
 
     boxes_param = []
     for d in trackers:
         x1, y1, x2, y2, track_id = d
+        best_iou = 0
+        best_cls = None
+        best_conf = None
         for r in results.boxes:
             rx1, ry1, rx2, ry2 = r.xyxy[0].cpu().numpy()
             rcls = int(r.cls[0])
             rconf = float(r.conf[0])
             rx1, ry1, rx2, ry2 = rx1 * scale_x, ry1 * scale_y, rx2 * scale_x, ry2 * scale_y
-            iou = max(0, min(x2, rx2) - max(x1, rx1)) * max(0, min(y2, ry2) - max(y1, ry1))
+            inter_x1, inter_y1 = max(x1, rx1), max(y1, ry1)
+            inter_x2, inter_y2 = min(x2, rx2), min(y2, ry2)
+            inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
             box_area = (rx2 - rx1) * (ry2 - ry1)
-            if iou / box_area > 0.5:
-                boxes_param.append([int(x1), int(y1), int(x2), int(y2), int(track_id), rcls, rconf])
-                break
+            iou = inter_area / box_area if box_area > 0 else 0
+            if iou > best_iou:
+                best_iou = iou
+                best_cls = rcls
+                best_conf = rconf
+        if best_iou > 0.3:
+            boxes_param.append([int(x1), int(y1), int(x2), int(y2), int(track_id), best_cls, best_conf])
 
     cv2.setMouseCallback("Object Detection", click_event, param=boxes_param)
 
