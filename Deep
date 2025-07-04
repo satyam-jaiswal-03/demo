@@ -1,0 +1,21 @@
+# deep_sort.py
+
+import numpy as np
+from collections import deque
+from deep_sort.sort import Sort as SortTracker
+
+class DeepSort:
+    def __init__(self, ckpt=None, use_cuda=True, max_age=30, min_hits=3, iou_threshold=0.3):
+        self.tracker = SortTracker(max_age=max_age, min_hits=min_hits, iou_threshold=iou_threshold)
+
+    def update(self, bbox_xywh_conf, ori_img):
+        """
+        bbox_xywh_conf: np.array([[x, y, w, h, conf], ...])
+        ori_img: original BGR frame, not used here but required for API compatibility
+        Returns np.array of [x1, y1, x2, y2, track_id]
+        """
+        outputs = self.tracker.update(bbox_xywh_conf)
+        return outputs
+
+    def increment_ages(self):
+        self.tracker.increment_ages()
