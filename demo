@@ -1,145 +1,99 @@
-import React, { useEffect, useRef, useState } from 'react';
+import cv2
+import numpy as np
+import time
+from ultralytics import YOLO
+from sort import Sort
 
-declare const cv: any; // OpenCV.js from global script
+model = YOLO('yolov8n.pt')
 
-interface DetectedShape {
-  x: number;
-  y: number;
-  radius: number;
-}
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("Could not open webcam")
+    exit()
 
-const ShapeDetector: React.FC = () => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-  const [cvReady, setCvReady] = useState(false);
-  const [detectedShapes, setDetectedShapes] = useState<DetectedShape[]>([]);
-  const [selectedBase64, setSelectedBase64] = useState<string | null>(null);
+selected_id = None
 
-  useEffect(() => {
-    if (window.cv) {
-      if (cv.getBuildInformation) {
-        setCvReady(true);
-      } else {
-        cv['onRuntimeInitialized'] = () => {
-          setCvReady(true);
-        };
-      }
-    } else {
-      console.error('OpenCV.js not loaded. Make sure <script src="https://docs.opencv.org/4.x/opencv.js"></script> is in your index.html.');
-    }
-  }, []);
+tracker = Sort()
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+cv2.namedWindow("Object Detection")
+boxes_param = []
 
-    const img = new Image();
-    img.onload = () => {
-      const canvas = canvasRef.current!;
-      const ctx = canvas.getContext('2d')!;
-      canvas.width = img.width;
-      canvas.height = img.height;
-      ctx.drawImage(img, 0, 0);
-      processImageWithOpenCV(canvas);
-    };
-    img.src = URL.createObjectURL(file);
-  };
+def click_event(event, x, y, flags, param):
+    global selected_id
+    if event == cv2.EVENT_LBUTTONDOWN:
+        for box in param:
+            x1, y1, x2, y2, track_id, cls, conf = box
+            if x1 <= x <= x2 and y1 <= y <= y2:
+                selected_id = track_id
+                print(f"Selected object ID {track_id} at ({x}, {y})")
+                break
 
-  const processImageWithOpenCV = (canvas: HTMLCanvasElement) => {
-    const src = cv.imread(canvas);
-    const gray = new cv.Mat();
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-    cv.GaussianBlur(gray, gray, new cv.Size(9, 9), 2, 2);
+cv2.setMouseCallback("Object Detection", click_event, param=[])
 
-    const circles = new cv.Mat();
-    cv.HoughCircles(
-      gray, circles, cv.HOUGH_GRADIENT, 1,
-      gray.rows/8, 100, 30, 0, 0
-    );
+prev_time = time.time()
 
-    const ctx = canvas.getContext('2d')!;
-    ctx.strokeStyle = 'red';
-    ctx.lineWidth = 3;
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("Failed to grab frame")
+        break
 
-    const detected: DetectedShape[] = [];
-    for (let i = 0; i < circles.cols; i++) {
-      const [x, y, radius] = circles.data32F.slice(i * 3, i * 3 + 3);
-      ctx.beginPath();
-      ctx.ellipse(x, y, radius, radius, 0, 0, 2 * Math.PI);
-      ctx.stroke();
-      detected.push({ x, y, radius });
-    }
-    setDetectedShapes(detected);
+    input_frame = cv2.resize(frame, (640, 480))
+    results = model(input_frame, verbose=False)[0]
+    detections = []
 
-    src.delete();
-    gray.delete();
-    circles.delete();
-  };
+    scale_x = frame.shape[1] / input_frame.shape[1]
+    scale_y = frame.shape[0] / input_frame.shape[0]
 
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    for r in results.boxes:
+        x1, y1, x2, y2 = r.xyxy[0].cpu().numpy()
+        cls = int(r.cls[0])
+        conf = float(r.conf[0])
+        x1, y1, x2, y2 = x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y
+        detections.append([x1, y1, x2, y2, conf])
 
-    const clicked = detectedShapes.find(
-      s => Math.hypot(s.x - x, s.y - y) <= s.radius
-    );
+    trackers = tracker.update(np.array(detections))
 
-    if (clicked) {
-      const canvas = canvasRef.current!;
-      const ctx = canvas.getContext('2d')!;
-      const cutSize = clicked.radius * 2;
-      const cutX = clicked.x - clicked.radius;
-      const cutY = clicked.y - clicked.radius;
-      const imageData = ctx.getImageData(cutX, cutY, cutSize, cutSize);
+    boxes_param = []
+    for d in trackers:
+        x1, y1, x2, y2, track_id = d
+        for r in results.boxes:
+            rx1, ry1, rx2, ry2 = r.xyxy[0].cpu().numpy()
+            rcls = int(r.cls[0])
+            rconf = float(r.conf[0])
+            rx1, ry1, rx2, ry2 = rx1 * scale_x, ry1 * scale_y, rx2 * scale_x, ry2 * scale_y
+            iou = max(0, min(x2, rx2) - max(x1, rx1)) * max(0, min(y2, ry2) - max(y1, ry1))
+            box_area = (rx2 - rx1) * (ry2 - ry1)
+            if iou / box_area > 0.5:
+                boxes_param.append([int(x1), int(y1), int(x2), int(y2), int(track_id), rcls, rconf])
+                break
 
-      const offCanvas = document.createElement('canvas');
-      offCanvas.width = cutSize;
-      offCanvas.height = cutSize;
-      const offCtx = offCanvas.getContext('2d')!;
-      offCtx.putImageData(imageData, 0, 0);
+    cv2.setMouseCallback("Object Detection", click_event, param=boxes_param)
 
-      const base64 = offCanvas.toDataURL();
-      setSelectedBase64(base64);
-    }
-  };
+    for box in boxes_param:
+        x1, y1, x2, y2, track_id, cls, conf = box
+        if selected_id is None:
+            label = f"ID:{track_id} {model.names[cls]} {conf:.2f}"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        elif track_id == selected_id:
+            label = f"ID:{track_id} {model.names[cls]} {conf:.2f} [TRACKING]"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-  return (
-    <div style={{ textAlign: 'center' }}>
-      {!cvReady && <p>Loading OpenCV.js... please wait.</p>}
-      {cvReady && (
-        <>
-          <input
-            type="file"
-            accept="image/*"
-            ref={fileInputRef}
-            onChange={handleImageUpload}
-          />
-          <br /><br />
-          <canvas
-            ref={canvasRef}
-            onClick={handleCanvasClick}
-            style={{ border: '1px solid black', maxWidth: '100%' }}
-          />
-          <br />
-          {selectedBase64 && (
-            <div>
-              <h3>Selected Shape Cutout</h3>
-              <img src={selectedBase64} alt="Selected Cutout" />
-              <br />
-              <button onClick={() => {
-                const a = document.createElement('a');
-                a.href = selectedBase64;
-                a.download = 'selected_shape.png';
-                a.click();
-              }}>Download Cutout</button>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-};
+    current_time = time.time()
+    fps = 1 / (current_time - prev_time)
+    prev_time = current_time
+    cv2.putText(frame, f"FPS: {fps:.1f}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
 
-export default ShapeDetector;
+    cv2.imshow("Object Detection", frame)
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):
+        break
+    elif key == ord('r'):
+        selected_id = None
+
+cap.release()
+cv2.destroyAllWindows()
